@@ -91,4 +91,25 @@ run_case threadpc-c10-p64 \
   "$BUILD/benchmarks/fluxnet_thread_echo --port 19109" 19109 \
   --connections 10 --payload 64 --threads 1 --outstanding 1
 
+# One variable at a time against epoll-1w-c10-p64 (pool on, gather on, affinity off).
+run_case epoll-1w-c10-p64-nopool \
+  "$BUILD/examples/fluxnet_echo --port 19110 --workers 1 --epoll --no-pool" 19110 \
+  --connections 10 --payload 64 --threads 1 --outstanding 1
+
+run_case epoll-1w-c10-p64-nogather \
+  "$BUILD/examples/fluxnet_echo --port 19111 --workers 1 --epoll --no-gather" 19111 \
+  --connections 10 --payload 64 --threads 1 --outstanding 1
+
+run_case epoll-1w-c10-p64-affinity \
+  "$BUILD/examples/fluxnet_echo --port 19112 --workers 1 --epoll --affinity" 19112 \
+  --connections 10 --payload 64 --threads 1 --outstanding 1
+
+if [[ -x "$BUILD/benchmarks/fluxnet_asio_echo" ]]; then
+  run_case asio-c10-p64 \
+    "$BUILD/benchmarks/fluxnet_asio_echo --port 19113" 19113 \
+    --connections 10 --payload 64 --threads 1 --outstanding 1
+else
+  echo "asio baseline binary not built; skipping asio-c10-p64"
+fi
+
 echo "raw json in $OUT"
