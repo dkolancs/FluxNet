@@ -26,10 +26,3 @@ set_tests_properties(fluxnet_integration PROPERTIES LABELS integration)
 set_tests_properties(fluxnet_concurrency PROPERTIES LABELS concurrency)
 set_tests_properties(fluxnet_fuzz PROPERTIES LABELS fuzz)
 set_tests_properties(fluxnet_stress PROPERTIES LABELS stress)
-if(FLUXNET_SANITIZER STREQUAL "thread")
-    set_tests_properties(
-        fluxnet_unit_fd fluxnet_unit_socket fluxnet_unit_codec fluxnet_unit_queue
-        fluxnet_unit_pool fluxnet_unit_histogram fluxnet_integration fluxnet_concurrency
-        fluxnet_fuzz fluxnet_stress
-        PROPERTIES ENVIRONMENT "TSAN_OPTIONS=suppressions=${CMAKE_SOURCE_DIR}/tests/tsan.supp")
-endif()

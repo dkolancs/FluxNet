@@ -1,7 +1,0 @@
-# io_uring SQ and CQ rings are shared kernel mappings. ThreadSanitizer treats
-# a later ring that reuses the same address as a race with an earlier ring that
-# was already destroyed (the feature probe versus a worker ring). The stacks
-# are inside liburing.h, not FluxNet connection state.
-race:^io_uring_prep_rw$
-race:^io_uring_sqe_set_data64$
-race:^__io_uring_peek_cqe$

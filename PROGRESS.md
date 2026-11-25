@@ -40,7 +40,7 @@ This completion branch is `cursor/fluxnet-completion`, cut from `origin/main` at
 
 ## Commands that passed
 
-Debug (`/workspace/build`, g++ 13.3.0) after the completion pass: integration, load-generator, and adapter tests passed. ASan and TSan `ctest -LE stress` passed (10 tests, including the adapter). UBSan `ctest -LE stress` passed and `./build-ubsan/tests/fluxnet_stress` passed. TSan uses `tests/tsan.supp` for liburing ring reuse only.
+Debug (`/workspace/build`, g++ 13.3.0) after the completion pass: integration, load-generator, and adapter tests passed. ASan and TSan `ctest -LE stress` passed (10 tests, including the adapter). UBSan `ctest -LE stress` passed and `./build-ubsan/tests/fluxnet_stress` passed. The feature probe was later moved before worker startup. After that, `Echo.IoUring*` and the full integration binary passed under TSan with no suppression file.
 
 ```bash
 ctest --test-dir build --output-on-failure

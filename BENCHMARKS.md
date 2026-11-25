@@ -122,7 +122,19 @@ This does not mean the server is faster with the SPSC. The server was not in thi
 | msgs/s | 392178 |
 | p50 / p99 / p99.9 / max ns | 65024 / 143360 / 315392 / 34203668 |
 
-A 24-hour soak was not started. The command, if someone runs it, is `DURATION=86400 PORT=19521 bash scripts/soak.sh`.
+A 24-hour soak was not started. On a host that can leave the process up:
+
+```bash
+DURATION=86400 PORT=19521 bash scripts/soak.sh
+```
+
+Hardware counters were not collected. `results/raw/perf.txt` records `perf_event_paranoid=2` and that `linux-tools-6.12.113` is not packaged here. On a host where `perf` is installed and `perf_event_paranoid` is 1 or lower:
+
+```bash
+bash scripts/profile.sh -- ./build-release/examples/fluxnet_echo --port 19701 --workers 1 --epoll
+```
+
+The script writes `results/raw/perf.txt` and does not invent counters. Affinity stays off unless the echo binary is given `--affinity`.
 
 ## Later short matrix
 
@@ -141,6 +153,10 @@ A 24-hour soak was not started. The command, if someone runs it, is `DURATION=86
 | `epoll-1w-c4-p64-churn.json` | 191842 | 40960 | 4 conn, `--churn-seconds 0.5`, connect_failures 0 |
 | `epoll-1w-c5000-p64.json` | 240632 | 58195968 | 1 worker, 5000 conn, 4 client threads, p50 12189696 ns |
 | `epoll-1w-c10000-p64.json` | 439820 | 40370176 | 1 worker, 10000 conn, `--max-connections 20000`, 4 client threads, p50 24903680 ns, failures 0, connect_failures 0 |
+
+That 10000-connection file is not an idle hold. `completed` is 879640 and `bytes` is 56296960, which is `879640 * 64`. The generator counts a completion only after the echoed payload matches the bytes it sent. `connect_failures` is 0 and `offered` is 1127232. `timed_out` is 9917 because each connection keeps one request outstanding and those in-flight sends are counted at the end of the window; `failures` stays 0. About 88 verified round trips completed per connection during the 2 second window.
+
+The one-hour soak file records generator RSS only at process exit (`generator_rss_kb` 4256). No server RSS samples were taken during the hour, so it is not a memory-stability trace. `bytes` is 90357872384, which is `1411841756 * 64`. The script log exited 0. `timed_out` is 22 of the 32 connections still waiting for one response when the window closed.
 
 Repeat msgs/s min 201612, median 203446, max 203478. That spread is about 1 percent. It is not a confidence interval for the other rows.
 

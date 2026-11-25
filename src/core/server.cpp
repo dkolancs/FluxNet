@@ -735,6 +735,15 @@ void Server::run() {
         callbacks.on_error = impl_->on_error;
         callbacks.on_backpressure = impl_->on_backpressure;
 
+        // Probe and open the acceptor ring before any worker thread creates its
+        // own ring. Doing this later races the probe's short-lived mapping with
+        // a live worker ring; ThreadSanitizer then reports liburing.h writes on
+        // a reused anon_inode:[io_uring] address.
+        if (resolved == IoBackend::IoUring) {
+            impl_->prepare_uring_accept();
+        } else {
+            impl_->accept_mode = "epoll";
+        }
         const int n = impl_->config.worker_threads;
         impl_->workers.reserve(static_cast<std::size_t>(n));
         for (int i = 0; i < n; ++i) {
@@ -752,11 +761,6 @@ void Server::run() {
             if (worker->failed()) {
                 throw std::runtime_error("worker failed during startup");
             }
-        }
-        if (resolved == IoBackend::IoUring) {
-            impl_->prepare_uring_accept();
-        } else {
-            impl_->accept_mode = "epoll";
         }
         if (impl_->config.cpu_affinity) {
             // Acceptor uses the last CPU in the cpuset when affinity is enabled.
