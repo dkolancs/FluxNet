@@ -173,6 +173,7 @@ void UringDriver::handle_cqe(Worker* worker, void* raw) {
     if (op == Uop::PollWake) {
         worker->uring_inflight_polls_--;
         worker->wake_fd_.drain();
+        worker->drain_outbound();
         if (!worker->stop_->load(std::memory_order_acquire) ||
             (worker->drain_ != nullptr && worker->drain_->load(std::memory_order_acquire))) {
             submit_poll(worker, worker->wake_fd_.fd(), POLLIN, make_token(Uop::PollWake, 0, 0));
@@ -221,6 +222,7 @@ void UringDriver::handle_cqe(Worker* worker, void* raw) {
         }
         conn->connecting = false;
         conn->connected = true;
+        worker->allow_output(conn);
         worker->connects_.add();
         worker->touch(conn);
         const auto id_index = conn->index;
@@ -286,8 +288,14 @@ void UringDriver::handle_cqe(Worker* worker, void* raw) {
             worker->bytes_out_.add(static_cast<std::uint64_t>(res));
             worker->consume_output(conn, static_cast<std::size_t>(res));
             worker->touch(conn);
+            const auto send_index = conn->index;
+            worker->flush_slot(send_index);
+            conn = worker->get(index, generation);
+            if (conn == nullptr) {
+                return;
+            }
             worker->note_low_watermark(conn);
-            if (!conn->destroyed && !conn->closing && conn->has_output()) {
+            if (!conn->destroyed && !conn->closing && conn->has_output() && !conn->send_inflight) {
                 submit_send(worker, conn);
             }
             if (!conn->destroyed && !conn->closing && conn->read_closed && !conn->has_output()) {
@@ -332,6 +340,7 @@ void UringDriver::run(Worker* worker) {
            (worker->drain_ != nullptr && worker->drain_->load(std::memory_order_acquire))) {
         worker->drain_handoff();
         worker->drain_tasks(false);
+        worker->drain_outbound();
         worker->process_deferred();
         if (worker->drain_deadline_reached()) {
             break;
@@ -372,10 +381,12 @@ void UringDriver::run(Worker* worker) {
         worker->io_depth_--;
         worker->drain_handoff();
         worker->drain_tasks(false);
+        worker->drain_outbound();
         worker->flush_closes();
     }
 
     worker->drain_tasks(true);
+    worker->drain_outbound();
     worker->close_all(CloseReason::Shutdown);
     io_uring_submit(&ring);
     const auto give_up = std::chrono::steady_clock::now() + std::chrono::seconds(2);

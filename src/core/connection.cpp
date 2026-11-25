@@ -5,7 +5,10 @@
 namespace fluxnet {
 
 ConnectionId Connection::id() const noexcept {
-    if (conn_ == nullptr || conn_->worker == nullptr || conn_->destroyed) {
+    // Valid for the whole callback, including on_disconnect. destroy_conn sets
+    // destroyed before the callback so send/close see a dead connection, but
+    // the id is still the identity the application must unsubscribe.
+    if (conn_ == nullptr || conn_->worker == nullptr) {
         return {};
     }
     return ConnectionId{conn_->worker->index(), conn_->index, conn_->generation};

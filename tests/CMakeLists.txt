@@ -15,7 +15,7 @@ fluxnet_test(fluxnet_unit_codec unit/test_codec.cpp)
 fluxnet_test(fluxnet_unit_queue unit/test_queue.cpp)
 fluxnet_test(fluxnet_unit_pool unit/test_pool.cpp)
 fluxnet_test(fluxnet_unit_histogram unit/test_histogram.cpp)
-fluxnet_test(fluxnet_integration integration/test_echo.cpp integration/test_limits.cpp integration/test_apps.cpp)
+fluxnet_test(fluxnet_integration integration/test_echo.cpp integration/test_limits.cpp integration/test_apps.cpp integration/test_admission.cpp)
 fluxnet_test(fluxnet_concurrency concurrency/test_spsc_threads.cpp)
 fluxnet_test(fluxnet_fuzz fuzz/test_fuzz.cpp)
 

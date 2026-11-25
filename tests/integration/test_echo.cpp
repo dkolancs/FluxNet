@@ -183,6 +183,7 @@ TEST(Echo, IoUringIfAvailable) {
     if (running.server.active_backend() != fluxnet::IoBackend::IoUring) {
         GTEST_SKIP() << running.server.backend_note();
     }
+    EXPECT_TRUE(running.server.backend_note().empty());
     fluxnet::ClientConfig client_config;
     client_config.host = "127.0.0.1";
     client_config.port = running.server.bound_port();

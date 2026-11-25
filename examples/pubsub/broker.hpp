@@ -13,8 +13,10 @@ namespace fluxnet::examples {
 
 // Topic map is owned here, guarded by mu_. It stores ConnectionId values, never
 // Connection pointers, because a connection is private to its worker.
-// Fan-out copies the subscriber list, drops the lock, then try_send's so the
-// lock is not held across another worker's queue.
+// Fan-out copies the subscriber list, drops the lock, then try_send's. try_send
+// admits on the owning worker's slot and wakes that worker. It does not borrow
+// a Connection from another worker. on_disconnect must run to completion before
+// the broker is destroyed; it only stores ConnectionId values.
 class Broker {
   public:
     explicit Broker(Server& server, std::size_t max_subs = 1024)
@@ -43,8 +45,12 @@ class Broker {
     }
 
     void on_disconnect(Connection& connection) {
+        const ConnectionId id = connection.id();
+        if (!id.valid()) {
+            return;
+        }
         std::lock_guard lock(mu_);
-        auto it = by_conn_.find(connection.id());
+        auto it = by_conn_.find(id);
         if (it == by_conn_.end()) {
             return;
         }
@@ -53,8 +59,7 @@ class Broker {
             if (topic_it == topics_.end()) {
                 continue;
             }
-            std::erase_if(topic_it->second,
-                          [&](const ConnectionId& id) { return id == connection.id(); });
+            std::erase_if(topic_it->second, [&](const ConnectionId& item) { return item == id; });
             if (topic_it->second.empty()) {
                 topics_.erase(topic_it);
             }

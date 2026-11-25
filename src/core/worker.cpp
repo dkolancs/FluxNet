@@ -134,6 +134,9 @@ bool Worker::queues_empty() {
     } else if (!handoff_mutex_.empty()) {
         return false;
     }
+    if (outbound_scheduled_.load(std::memory_order_acquire) != 0) {
+        return false;
+    }
     return tasks_.empty() && deferred_reads_.empty() && deferred_writes_.empty();
 }
 
@@ -258,6 +261,7 @@ Conn* Worker::install(int fd, bool already_reserved, bool connecting) {
     conn->fd = fd;
     conn->index = index;
     conn->generation = generations_[index];
+    bind_outbound(index, conn->generation, !connecting);
     conn->counted = true;
     conn->connecting = connecting;
     conn->connected = !connecting;
@@ -383,17 +387,29 @@ int Worker::fill_iov(Conn* conn, iovec* iov, int max_count) {
 }
 
 void Worker::consume_output(Conn* conn, std::size_t n) {
+    const std::size_t consumed = n;
     while (n > 0 && !conn->out.empty()) {
         auto& chunk = conn->out.front();
         const std::size_t left = chunk.buf.size() > chunk.off ? chunk.buf.size() - chunk.off : 0;
         if (n < left) {
             chunk.off += n;
             conn->out_bytes = conn->out_bytes > n ? conn->out_bytes - n : 0;
-            return;
+            n = 0;
+            break;
         }
         n -= left;
         conn->out_bytes = conn->out_bytes > left ? conn->out_bytes - left : 0;
         conn->out.pop_front();
+    }
+    const std::size_t applied = consumed - n;
+    if (applied == 0) {
+        return;
+    }
+    if (OutboundSlot* slot = find_outbound(conn->index)) {
+        std::lock_guard lock(slot->mu);
+        if (slot->generation == conn->generation) {
+            slot->admitted = slot->admitted > applied ? slot->admitted - applied : 0;
+        }
     }
 }
 
@@ -414,7 +430,7 @@ void Worker::note_high_watermark(Conn* conn) {
 }
 
 void Worker::note_low_watermark(Conn* conn) {
-    if (!conn->read_paused || conn->out_bytes > opt_.net.output_low_watermark) {
+    if (!conn->read_paused || admitted_bytes(conn) > opt_.net.output_low_watermark) {
         return;
     }
     conn->read_paused = false;
@@ -506,7 +522,7 @@ void Worker::on_timer() {
             if (node.epoch != conn->slow_epoch) {
                 continue;
             }
-            if (conn->read_paused || conn->out_bytes >= opt_.net.output_high_watermark) {
+            if (conn->read_paused || admitted_bytes(conn) >= opt_.net.output_high_watermark) {
                 timeouts_slow_.add();
                 request_close(conn, 0, CloseReason::SlowConsumer);
             }
@@ -562,6 +578,9 @@ void Worker::destroy_conn(Conn* conn) {
     conn->destroyed = true;
     const std::uint32_t index = conn->index;
     const std::uint32_t generation = conn->generation;
+    // Reject new admits and drop bytes that will not be written. The close is
+    // the hard outcome for anything already Accepted.
+    clear_outbound(index);
     if (conn->in_epoll) {
         epoll_.del(conn->fd);
         conn->in_epoll = false;
@@ -738,6 +757,7 @@ void Worker::on_writable(Conn* conn) {
         }
         conn->connecting = false;
         conn->connected = true;
+        allow_output(conn);
         connects_.add();
         touch(conn);
         const auto index = conn->index;
@@ -804,6 +824,225 @@ void Worker::on_writable(Conn* conn) {
     }
 }
 
+OutboundSlot* Worker::find_outbound(std::uint32_t index) {
+    std::shared_lock lock(outbound_map_mu_);
+    if (index >= outbound_.size()) {
+        return nullptr;
+    }
+    return outbound_[index].get();
+}
+
+void Worker::bind_outbound(std::uint32_t index, std::uint32_t generation, bool open) {
+    {
+        std::unique_lock lock(outbound_map_mu_);
+        if (outbound_.size() <= index) {
+            outbound_.resize(static_cast<std::size_t>(index) + 1);
+        }
+        if (!outbound_[index]) {
+            outbound_[index] = std::make_unique<OutboundSlot>();
+        }
+    }
+    OutboundSlot* slot = find_outbound(index);
+    if (slot == nullptr) {
+        return;
+    }
+    std::lock_guard guard(slot->mu);
+    if (slot->scheduled) {
+        slot->scheduled = false;
+        outbound_scheduled_.fetch_sub(1, std::memory_order_release);
+    }
+    slot->generation = generation;
+    slot->admitted = 0;
+    slot->open = open;
+    slot->frames.clear();
+}
+
+void Worker::clear_outbound(std::uint32_t index) {
+    OutboundSlot* slot = find_outbound(index);
+    if (slot == nullptr) {
+        return;
+    }
+    std::lock_guard guard(slot->mu);
+    if (slot->scheduled) {
+        slot->scheduled = false;
+        outbound_scheduled_.fetch_sub(1, std::memory_order_release);
+    }
+    slot->generation = 0;
+    slot->open = false;
+    slot->admitted = 0;
+    slot->frames.clear();
+}
+
+void Worker::allow_output(Conn* conn) {
+    if (conn == nullptr) {
+        return;
+    }
+    OutboundSlot* slot = find_outbound(conn->index);
+    if (slot == nullptr) {
+        return;
+    }
+    std::lock_guard guard(slot->mu);
+    if (slot->generation == conn->generation) {
+        slot->open = true;
+    }
+}
+
+std::size_t Worker::admitted_bytes(const Conn* conn) {
+    if (conn == nullptr) {
+        return 0;
+    }
+    OutboundSlot* slot = find_outbound(conn->index);
+    if (slot == nullptr) {
+        return conn->out_bytes;
+    }
+    std::lock_guard guard(slot->mu);
+    if (slot->generation != conn->generation) {
+        return conn->out_bytes;
+    }
+    return slot->admitted;
+}
+
+void Worker::drain_outbound() {
+    std::vector<std::uint32_t> local;
+    {
+        std::lock_guard lock(dirty_mu_);
+        local.swap(dirty_);
+    }
+    for (std::uint32_t index : local) {
+        flush_slot(index);
+    }
+}
+
+void Worker::flush_slot(std::uint32_t index) {
+    OutboundSlot* slot = find_outbound(index);
+    if (slot == nullptr || slot->flushing) {
+        return;
+    }
+    slot->flushing = true;
+    struct ClearFlush {
+        bool& flag;
+        ~ClearFlush() { flag = false; }
+    } clear{slot->flushing};
+
+    while (true) {
+        std::deque<std::vector<std::byte>> local;
+        std::uint32_t generation = 0;
+        {
+            std::lock_guard guard(slot->mu);
+            if (slot->frames.empty()) {
+                if (slot->scheduled) {
+                    slot->scheduled = false;
+                    outbound_scheduled_.fetch_sub(1, std::memory_order_release);
+                }
+                break;
+            }
+            local.swap(slot->frames);
+            generation = slot->generation;
+        }
+        Conn* conn = get(index, generation);
+        if (conn == nullptr) {
+            std::size_t dropped = 0;
+            for (const auto& frame : local) {
+                dropped += frame.size();
+            }
+            std::lock_guard guard(slot->mu);
+            if (slot->generation == generation && dropped > 0) {
+                slot->admitted = slot->admitted > dropped ? slot->admitted - dropped : 0;
+            }
+            continue;
+        }
+        for (auto& frame : local) {
+            PooledBuffer buf = pool_.acquire(frame.size());
+            std::memcpy(buf.data(), frame.data(), frame.size());
+            buf.set_size(frame.size());
+            const std::size_t nbytes = frame.size();
+            conn->out.push_back(Conn::OutChunk{std::move(buf), 0});
+            conn->out_bytes += nbytes;
+        }
+        if (conn->destroyed || conn->closing) {
+            continue;
+        }
+        if (admitted_bytes(conn) >= opt_.net.output_high_watermark) {
+            note_high_watermark(conn);
+        }
+        conn = get(index, generation);
+        if (conn == nullptr || conn->destroyed || conn->closing) {
+            continue;
+        }
+        if (opt_.backend == IoBackend::IoUring) {
+            UringDriver::submit_send(this, conn);
+        } else {
+            on_writable(conn);
+            conn = get(index, generation);
+            if (conn != nullptr && !conn->destroyed && !conn->closing) {
+                try {
+                    update_epoll(conn);
+                } catch (const std::exception& ex) {
+                    Logger::log(LogLevel::Warn, "epoll write interest: %s", ex.what());
+                }
+            }
+        }
+    }
+}
+
+SendResult Worker::admit(ConnectionId id, MessageType type, std::span<const std::byte> payload,
+                         std::uint16_t flags) {
+    if (!id.valid() || id.worker != index_) {
+        send_closed_.add();
+        return SendResult::Closed;
+    }
+    if (payload.size() > opt_.net.max_frame_size ||
+        !valid_message_type(static_cast<std::uint16_t>(type))) {
+        send_invalid_.add();
+        return SendResult::InvalidMessage;
+    }
+    const std::size_t frame = payload.size() + 8;
+    std::vector<std::byte> encoded(frame);
+    std::size_t written = 0;
+    if (!write_frame(encoded.data(), encoded.size(), type, flags, payload, opt_.net.max_frame_size,
+                     written) ||
+        written != frame) {
+        send_invalid_.add();
+        return SendResult::InvalidMessage;
+    }
+    OutboundSlot* slot = find_outbound(id.index);
+    if (slot == nullptr) {
+        send_closed_.add();
+        return SendResult::Closed;
+    }
+    bool schedule = false;
+    {
+        std::lock_guard guard(slot->mu);
+        if (slot->generation != id.generation || !slot->open) {
+            send_closed_.add();
+            return SendResult::Closed;
+        }
+        if (slot->admitted >= opt_.net.output_high_watermark ||
+            slot->admitted + frame > opt_.net.max_pending_output) {
+            send_backpressured_.add();
+            return SendResult::Backpressured;
+        }
+        slot->frames.push_back(std::move(encoded));
+        slot->admitted += frame;
+        if (!slot->scheduled) {
+            slot->scheduled = true;
+            outbound_scheduled_.fetch_add(1, std::memory_order_release);
+            schedule = true;
+        }
+    }
+    messages_out_.add();
+    if (on_this_thread()) {
+        flush_slot(id.index);
+    } else if (schedule) {
+        {
+            std::lock_guard lock(dirty_mu_);
+            dirty_.push_back(id.index);
+        }
+        wake_fd_.notify();
+    }
+    return SendResult::Accepted;
+}
+
 SendResult Worker::enqueue(Conn* conn, MessageType type, std::span<const std::byte> payload,
                            std::uint16_t flags) {
     if (!on_this_thread()) {
@@ -814,46 +1053,7 @@ SendResult Worker::enqueue(Conn* conn, MessageType type, std::span<const std::by
         send_closed_.add();
         return SendResult::Closed;
     }
-    if (payload.size() > opt_.net.max_frame_size ||
-        !valid_message_type(static_cast<std::uint16_t>(type))) {
-        send_invalid_.add();
-        return SendResult::InvalidMessage;
-    }
-    const std::size_t frame = payload.size() + 8;
-    if (conn->out_bytes >= opt_.net.output_high_watermark ||
-        conn->out_bytes + frame > opt_.net.max_pending_output) {
-        send_backpressured_.add();
-        note_high_watermark(conn);
-        return SendResult::Backpressured;
-    }
-    PooledBuffer encoded = encode_frame(pool_, type, flags, payload, opt_.net.max_frame_size);
-    if (!encoded) {
-        send_invalid_.add();
-        return SendResult::InvalidMessage;
-    }
-    const std::size_t nbytes = encoded.size();
-    conn->out.push_back(Conn::OutChunk{std::move(encoded), 0});
-    conn->out_bytes += nbytes;
-    messages_out_.add();
-    if (conn->out_bytes >= opt_.net.output_high_watermark) {
-        note_high_watermark(conn);
-    }
-    if (conn->closing || conn->destroyed) {
-        return SendResult::Accepted;
-    }
-    if (opt_.backend == IoBackend::IoUring) {
-        UringDriver::submit_send(this, conn);
-    } else {
-        on_writable(conn);
-        if (!conn->destroyed && !conn->closing) {
-            try {
-                update_epoll(conn);
-            } catch (const std::exception& ex) {
-                Logger::log(LogLevel::Warn, "epoll write interest: %s", ex.what());
-            }
-        }
-    }
-    return SendResult::Accepted;
+    return admit(ConnectionId{index_, conn->index, conn->generation}, type, payload, flags);
 }
 
 void Worker::drain_handoff() {
@@ -969,7 +1169,8 @@ bool Worker::drain_deadline_reached() const {
 }
 
 int Worker::wait_timeout_ms() const {
-    if (!deferred_reads_.empty() || !deferred_writes_.empty()) {
+    if (!deferred_reads_.empty() || !deferred_writes_.empty() ||
+        outbound_scheduled_.load(std::memory_order_acquire) != 0) {
         return 0;
     }
     if (drain_ != nullptr && drain_->load(std::memory_order_acquire) &&
@@ -1008,6 +1209,7 @@ void Worker::run_epoll() {
            (drain_ != nullptr && drain_->load(std::memory_order_acquire))) {
         drain_handoff();
         drain_tasks(false);
+        drain_outbound();
         process_deferred();
         if (drain_deadline_reached()) {
             break;
@@ -1034,6 +1236,7 @@ void Worker::run_epoll() {
             const std::uint32_t ev = events[i].events;
             if (token == kTokenWake) {
                 wake_fd_.drain();
+                drain_outbound();
                 continue;
             }
             if (token == kTokenTimer) {
@@ -1087,10 +1290,12 @@ void Worker::run_epoll() {
         // between the drain and the next wait cannot be lost.
         drain_handoff();
         drain_tasks(false);
+        drain_outbound();
         flush_closes();
     }
     drain_tasks(true);
     drain_handoff();
+    drain_outbound();
     close_all(CloseReason::Shutdown);
     for (int i = 0; i < 4; ++i) {
         flush_closes();
@@ -1100,50 +1305,13 @@ void Worker::run_epoll() {
 SendResult Worker::send_external(ConnectionId id, MessageType type,
                                  std::span<const std::byte> payload, std::uint16_t flags,
                                  bool block, std::chrono::milliseconds wait) {
-    if (id.worker != index_ || !id.valid()) {
-        return SendResult::Closed;
-    }
-    if (on_this_thread()) {
-        return enqueue(get(id.index, id.generation), type, payload, flags);
-    }
-    if (payload.size() > opt_.net.max_frame_size) {
-        send_invalid_.add();
-        return SendResult::InvalidMessage;
-    }
-    std::vector<std::byte> copy(payload.begin(), payload.end());
-    if (!block) {
-        const bool queued =
-            tasks_.try_push(Task{[this, id, type, flags, buf = std::move(copy)]() mutable {
-                Conn* conn = get(id.index, id.generation);
-                if (conn == nullptr) {
-                    send_closed_.add();
-                    return;
-                }
-                enqueue(conn, type, buf, flags);
-            }});
-        if (!queued) {
-            task_queue_full_.add();
-            return SendResult::Backpressured;
-        }
-        wake_fd_.notify();
-        return SendResult::Accepted;
-    }
-    auto waiter = std::make_shared<ResultWait>();
-    const bool queued =
-        tasks_.try_push(Task{[this, id, type, flags, buf = std::move(copy), waiter]() mutable {
-            Conn* conn = get(id.index, id.generation);
-            if (conn == nullptr) {
-                waiter->set(SendResult::Closed);
-                return;
-            }
-            waiter->set(enqueue(conn, type, buf, flags));
-        }});
-    if (!queued) {
-        task_queue_full_.add();
-        return SendResult::Backpressured;
-    }
-    wake_fd_.notify();
-    return waiter->get(wait);
+    // Admission is synchronous on the slot mutex. `block` and `wait` used to
+    // park the caller until the owner thread ran enqueue, which could return
+    // Accepted and then drop the frame. They are unused so two workers cannot
+    // deadlock waiting on each other.
+    (void)block;
+    (void)wait;
+    return admit(id, type, payload, flags);
 }
 
 PostResult Worker::post(ConnectionId id, std::function<void(Connection&)> fn) {
@@ -1246,6 +1414,7 @@ void Worker::start_connect(const std::string& host, std::uint16_t port,
     if (!pending) {
         conn->connecting = false;
         conn->connected = true;
+        allow_output(conn);
         connects_.add();
         const auto index = conn->index;
         const auto generation = conn->generation;

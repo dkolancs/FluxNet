@@ -13,7 +13,7 @@ The public surface is `include/fluxnet/`. Callbacks see a `Connection` that is a
 - Acceptor thread: `Server::run()` itself. It binds, listens, accepts, and joins workers before it returns.
 - Worker threads: each runs `Worker::thread_main`.
 - A connection is created on a worker and never migrates.
-- `Connection::send` and `Connection::close` are owner-thread operations. `Server::send` / `Client::send` may be called from a non-worker thread; they queue a task and wait. From a *different* worker of the same process object they do not wait, because two workers blocking on each other would deadlock. That path returns the non-blocking `try_send` result.
+- `Connection::send` and `Connection::close` are owner-thread operations. `Server::send`, `Server::try_send`, and the `Client` equivalents admit the frame on the slot queue before they return. They do not wait on the owner loop, because two workers blocking on each other would deadlock. The owner thread is still the only thread that writes the socket.
 - Callbacks (`on_connect`, `on_message`, `on_disconnect`, `on_error`, `on_backpressure`) run on the owning worker.
 - Exceptions leaving a callback are caught. The error is logged and that connection is closed.
 
@@ -81,11 +81,25 @@ Types: `Data=1`, `Ping=2`, `Pong=3`, `Error=4`, `Close=5`. The library does not 
 
 `MessageView::payload()` points at the decoder buffer and is invalid after `on_message` returns. The callback may `send` or `close`. It must not re-enter the read loop.
 
+## Send admission
+
+This is the contract for `Connection::send`, `Server::send`, `Server::try_send`, and the `Client` equivalents.
+
+- `Accepted` means the entire frame is queued for that connection. The owning worker will write it, or the connection will surface a hard error or close. Accepted is never a silent drop.
+- `Backpressured` means nothing from that call was queued. The call returns `Backpressured` when `admitted + frame` would exceed `max_pending_output`, or when `admitted` is already at `output_high_watermark`.
+- Admission is decided before the call returns. `try_send` does not return `Accepted` for a task the worker might later reject.
+- The bytes live in a per-slot outbound queue on the worker (a mutex, a generation, and a byte count). The caller does not touch the `Conn` object. Only the owning worker moves bytes onto the socket and into the buffer pool.
+- Cross-thread admission does not wait on the owner loop. Two workers sending to each other must not block on each other's reactors.
+- If the connection closes before those bytes are written, they are discarded as part of that close. That is the hard outcome, not a drop on a live connection.
+- `send` and `try_send` use the same admission. Neither waits for the kernel to accept the bytes.
+
+`admitted` counts bytes queued and not yet accepted by the kernel, including frames the owner has not spliced into the socket queue yet.
+
 ## Backpressure and timers
 
-- If `out_bytes + frame > max_pending_output`, or `out_bytes` is already at the high watermark, `send` returns `Backpressured` and does not queue the new frame.
+- If `admitted + frame > max_pending_output`, or `admitted` is already at the high watermark, `send` / `try_send` returns `Backpressured` and does not queue the new frame.
 - Crossing the high watermark removes read interest, fires `on_backpressure(conn, true)` once, and arms the slow-consumer timer.
-- When `out_bytes` falls to the low watermark or below, reads resume, `on_backpressure(conn, false)` fires, and a read is deferred.
+- When `admitted` falls to the low watermark or below, reads resume, `on_backpressure(conn, false)` fires, and a read is deferred.
 - A connection that stays at/above the high watermark for `slow_consumer_timeout` is closed. Zero disables the timer.
 - Idle timeout is based on the last successful read or write. Zero disables it. Timers are lazy: one heap entry is armed, and a firing timer that is early is re-armed. Stale heap nodes are ignored via generation. They are popped when their deadline arrives, so churn cannot grow the heap without bound.
 - `timerfd` uses a relative `CLOCK_MONOTONIC` deadline (`TFD` without `ABSTIME`) computed from `steady_clock`, which on libstdc++/libc++ Linux is `CLOCK_MONOTONIC`.
@@ -121,6 +135,10 @@ A worker retains at most:
 - at most `queue_capacity` handed-off fds.
 
 Connection count is capped by `max_connections`. This is bounded, not tiny. `queue_capacity * max_frame_size * workers` is the cross-thread task ceiling and is documented so callers do not treat the defaults as free.
+
+## Latency histograms
+
+`LogHistogram::merge` adds bucket counts, the sample count, and the sum, and takes the minimum and the maximum. Percentiles are computed from the merged buckets. The load generator keeps a histogram per thread and merges them before it reports p50, p95, p99, p99.9, and max. It does not report the maximum of the per-thread percentiles. Throughput remains the sum of completed messages.
 
 ## What is intentionally not claimed
 

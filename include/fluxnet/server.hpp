@@ -39,12 +39,12 @@ class Server {
     std::string backend_note() const;
     MetricsSnapshot metrics() const;
 
-    // Owner thread: runs inline. External thread: queues and waits up to shutdown_timeout.
-    // A different worker of this server does not wait (see DESIGN.md).
+    // Admission finishes before either call returns. Accepted means the frame is
+    // queued and will be written, or the connection will close or error. It is
+    // not a silent drop. Backpressured means nothing from that call was queued.
+    // Neither call waits for the kernel write or for another worker's loop.
     SendResult send(ConnectionId id, MessageType type, std::span<const std::byte> payload,
                     std::uint16_t flags = 0);
-    // Never blocks. Accepted means the task was queued, not that the bytes were written.
-    // If the worker later cannot queue the frame, send_backpressured increments.
     SendResult try_send(ConnectionId id, MessageType type, std::span<const std::byte> payload,
                         std::uint16_t flags = 0);
     PostResult post(ConnectionId id, std::function<void(Connection&)> fn);
