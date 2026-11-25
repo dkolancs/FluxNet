@@ -1,0 +1,19 @@
+---
+description: Thread and resource ownership invariants
+globs: "**/*.{hpp,h,cpp,cc,md}"
+alwaysApply: true
+---
+
+# Ownership
+
+- One acceptor thread. N worker threads. A connection is owned by exactly one worker for its whole life. No shared mutable connection state.
+- Each worker owns its reactor, connections, buffer pool, timers, task queue, and counters.
+- Acceptor-to-worker handoff is a bounded queue (mutex queue or lock-free SPSC). The SPSC has one producer (acceptor) and one consumer (that worker). Cross-thread application tasks are multi-producer and use the mutex queue.
+- Wake protocol: enqueue, then write eventfd. The consumer drains the queue after the eventfd read and checks the queue again before blocking.
+- Connection identity is (worker, index, generation). Epoll/io_uring user data carries index and generation. A stale event must not touch a recycled fd.
+- Buffers return to a pool only when no in-flight read or write still references them. io_uring buffers stay alive until the CQE.
+- Output is bounded by `max_pending_output`. At the high watermark, reads pause and further `send` calls return `Backpressured`. Below the low watermark, reads resume.
+- Global caps: `max_connections`, queue capacity, pool freelist limits, `max_frame_size` checked before allocation.
+- Signal handlers may only write an async-signal-safe wake (prefer signalfd and a blocked signal mask). No logging, allocation, or locks in a handler.
+- Callbacks run on the owning worker. `MessageView` is valid only for the duration of `on_message`. Exceptions from callbacks are caught at the boundary; the connection is closed and the process stays up.
+- Do not call the server lock-free. Only the SPSC handoff is lock-free, and only if its atomics are actually lock-free.

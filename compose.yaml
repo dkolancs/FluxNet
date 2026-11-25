@@ -1,0 +1,26 @@
+# Local-only compose. No registry, no paid services.
+# Docker was not available in the environment that wrote this file, so it has not been executed here.
+services:
+  echo:
+    build: .
+    command: ["./build/examples/fluxnet_echo", "--host", "0.0.0.0", "--port", "9000", "--workers", "2"]
+    networks: [fluxnet]
+  load:
+    build: .
+    command:
+      [
+        "./build/benchmarks/fluxnet_bench",
+        "--host", "echo",
+        "--port", "9000",
+        "--connections", "16",
+        "--payload", "64",
+        "--threads", "1",
+        "--warmup", "1",
+        "--duration", "3",
+        "--out", "/tmp/bench.json",
+      ]
+    depends_on: [echo]
+    networks: [fluxnet]
+networks:
+  fluxnet:
+    driver: bridge

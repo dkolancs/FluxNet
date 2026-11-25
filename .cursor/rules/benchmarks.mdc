@@ -1,0 +1,17 @@
+---
+description: Benchmark honesty
+globs: "**/*.{md,py,cpp,hpp,json,csv}"
+alwaysApply: true
+---
+
+# Benchmark integrity
+
+- Never invent throughput, latency, CPU, RSS, or speedup numbers. Write a number into README, BENCHMARKS.md, plots, or the case study only after a command in this workspace produced it.
+- Keep the command, git hash, compiler, flags, backend, message size, connection count, and duration next to the number.
+- Distinguish offered load, achieved sends, successful replies, failures, and timeouts.
+- Do not publish a full cartesian comparison. Isolate one variable at a time and say what was not run.
+- Loopback on this VM is not a production NIC. Say so.
+- If `perf` is blocked or missing, do not invent counter data.
+- Charts must be generated from `results/raw`. If the file is missing, do not draw a stand-in.
+- Retained buffer-pool memory is not a leak. Sanitizer failures are not suppressed to make a run look green.
+- Soak scripts must be labeled with the duration that actually finished.
