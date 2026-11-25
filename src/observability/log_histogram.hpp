@@ -50,6 +50,25 @@ class LogHistogram {
         ++buckets_[power * kSub + sub];
     }
 
+    // Adds bucket counts. Percentiles of the result are the merged distribution,
+    // not the max of the inputs' percentiles.
+    void merge(const LogHistogram& other) noexcept {
+        if (other.count_ == 0) {
+            return;
+        }
+        for (int i = 0; i < kBuckets; ++i) {
+            buckets_[static_cast<std::size_t>(i)] += other.buckets_[static_cast<std::size_t>(i)];
+        }
+        count_ += other.count_;
+        sum_ += other.sum_;
+        if (other.min_ < min_) {
+            min_ = other.min_;
+        }
+        if (other.max_ > max_) {
+            max_ = other.max_;
+        }
+    }
+
     std::uint64_t count() const noexcept { return count_; }
     std::uint64_t min() const noexcept { return count_ == 0 ? 0 : min_; }
     std::uint64_t max() const noexcept { return max_; }

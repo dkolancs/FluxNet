@@ -22,3 +22,22 @@ TEST(Histogram, EmptyIsZero) {
     EXPECT_EQ(hist.percentile(0.99), 0u);
     EXPECT_EQ(hist.count(), 0u);
 }
+
+TEST(Histogram, MergeIsNotMaxOfPercentiles) {
+    fluxnet::detail::LogHistogram low;
+    fluxnet::detail::LogHistogram high;
+    for (int i = 0; i < 100; ++i) {
+        low.record(1000);
+        high.record(100000);
+    }
+    const auto max_of_p50 = std::max(low.percentile(0.50), high.percentile(0.50));
+    fluxnet::detail::LogHistogram merged = low;
+    merged.merge(high);
+    EXPECT_EQ(merged.count(), 200u);
+    EXPECT_EQ(merged.min(), 1000u);
+    EXPECT_EQ(merged.max(), 100000u);
+    // Half the merged samples are 1000, so p50 stays in that bucket.
+    // The max of the per-thread p50s is the high distribution's p50.
+    EXPECT_LT(merged.percentile(0.50), max_of_p50);
+    EXPECT_GT(max_of_p50, 50000u);
+}
