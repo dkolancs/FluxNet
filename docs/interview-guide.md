@@ -45,21 +45,21 @@ A lost wakeup is why the push happens before the eventfd write, and why `stop()`
 
 ## Latency
 
-The histogram's percentile is a bucket upper bound. p99 on one connection was about 13 µs. p99 on 1000 connections was about 5.8 ms. Same server, same payload, different queueing. Tail latency moved because many connections shared one thread, not because the frame format changed. The 4-worker run improved rate and hurt the tail; it was also oversubscribed. Coordinated omission: a closed loop does not send the next request until the previous one returns, so it does not sample the waits you would see if you had offered a fixed rate during a stall. The generator can run open loop; the published matrix did not.
+The histogram's percentile is a bucket upper bound. With more than one generator thread, the buckets are merged before the percentile. That is not the max of the per-thread percentiles. On the release run in `results/raw/`, epoll p99 was 15.0 µs at 1 connection and 6.62 ms at 1000 connections, both 64-byte payloads, 1 worker. The 1000-connection file used 2 generator threads, so that p99 is the merged histogram. The 4-worker, 100-connection run raised throughput and the merged p99 was 4.13 ms; that process had more threads than the guest has CPUs. Coordinated omission: a closed loop does not send the next request until the previous one returns, so it does not sample the waits you would see if you had offered a fixed rate during a stall. The generator can run open loop; the published matrix did not.
 
 ## Questions tied to the code
 
 1. In `FrameDecoder::feed`, why is `payload_.resize` after the max-frame check? What happens on type 9?
 2. Why does `update_epoll` add `EPOLLOUT` only when `has_output()` is true?
 3. Why is `defer_read` called when reads resume, even in level trigger?
-4. What does `try_send` returning `Accepted` not mean? Look at `Worker::send_external`.
+4. What does `try_send` returning `Accepted` mean, and what does it not mean? Look at `Worker::admit`. It does not mean the kernel has the bytes. It does mean the frame is queued, or the connection will close. `Backpressured` means that call queued nothing.
 5. Why is the pub/sub map not allowed to hold `Connection&`?
 6. The blocking 1-connection server beat epoll. What cost is the reactor paying that the blocking loop is not?
 
 ## Exercises
 
-- Turn `use_buffer_pool` off and on, rerun `scripts/benchmark.sh` for one case, and put both JSON files through `scripts/compare_benchmarks.py`.
-- Run the 10-connection epoll case five times and report the spread. The two runs already in `results/raw` differ by about 4%.
+- Turn `use_buffer_pool` off and on. `results/raw/epoll-1w-c10-p64.json` and `epoll-1w-c10-p64-nopool.json` are one pair. The rates were 207144 and 205229 msgs/s. That is one run each, not a reason to delete the pool.
+- The older unmerged-percentile files are in `results/legacy-unmerged/`. Do not quote them as the current p99.
 - Set `worker_threads` to 1 and to 2 on this 4-vCPU guest with the same connection count, and compare p99. Do not add the generator's threads on top of the CPUs and then call the tail a property of epoll alone.
 - Change the echo callback to copy the payload into a `std::string` stored on the connection and see that you no longer depend on `MessageView`'s lifetime. Measure whether it shows up at 64 bytes.
 

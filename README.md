@@ -6,22 +6,25 @@ It is a teaching-sized reactor: one acceptor thread, N worker threads, one owner
 
 ## What was measured here
 
-These numbers are from one KVM guest (4 vCPU, kernel 6.12.113+, g++ 13.3.0, Release). The load generator and the server shared the machine. Loopback is not a NIC. The `git` field inside the JSON is `5e0a6aa` because this tree is uncommitted; that hash is only the initial README commit, not the library. Raw files are in `results/raw/`. A bar chart of those files is `results/plots/throughput.png`.
+These numbers are from one KVM guest (4 vCPU, kernel 6.12.113+, g++ 13.3.0, Release). The load generator and the server shared the machine. Loopback is not a NIC. The `git` field inside the JSON is `ecc7a98`. Raw files are in `results/raw/`. A bar chart of those files is `results/plots/throughput.png`. Percentiles are merged histograms when the generator used more than one thread. Older max-of-percentiles files are in `results/legacy-unmerged/` and are not this table.
 
 | Run | msgs/s | p50 | p99 | failures |
 | --- | --- | --- | --- | --- |
-| epoll, 1 worker, 1 conn, 64 B, 2 s | 80518 | 12.3 µs | 13.4 µs | 0 |
-| blocking, 1 conn, 64 B, 2 s | 84762 | 11.4 µs | 14.5 µs | 0 |
-| epoll, 1 worker, 10 conn, 64 B, 2 s | 209076 | 39.4 µs | 77.8 µs | 0 |
-| same case, second run | 217212 | 49.7 µs | 68.6 µs | 0 |
-| edge-triggered epoll, 1 worker, 10 conn, 64 B | 216320 | 43.5 µs | 54.3 µs | 0 |
-| io_uring workers, 1 worker, 10 conn, 64 B | 223502 | 40.4 µs | 56.8 µs | 0 |
-| thread-per-connection, 10 conn, 64 B | 206660 | 35.3 µs | 72.7 µs | 0 |
-| epoll, 4 workers, 100 conn, 64 B, client threads 2 | 373133 | 130 µs | 4.13 ms | 0 |
-| epoll, 1 worker, 1000 conn, 64 B | 212232 | 4.65 ms | 5.83 ms | 0 |
-| 45 s smoke, epoll 2 workers, 32 conn, 64 B | 419925 | 58.4 µs | 127 µs | 0 |
+| epoll, 1 worker, 1 conn, 64 B, 2 s | 79723 | 12.3 µs | 15.0 µs | 0 |
+| blocking, 1 conn, 64 B, 2 s | 84672 | 11.6 µs | 13.8 µs | 0 |
+| epoll, 1 worker, 10 conn, 64 B, 2 s | 207144 | 37.9 µs | 79.9 µs | 0 |
+| same shape, buffer pool off | 205229 | 38.4 µs | 81.9 µs | 0 |
+| same shape, scatter/gather off | 203398 | 38.9 µs | 81.9 µs | 0 |
+| same shape, CPU affinity on | 208064 | 38.4 µs | 80.9 µs | 0 |
+| edge-triggered epoll, 1 worker, 10 conn, 64 B | 204479 | 47.1 µs | 57.9 µs | 0 |
+| io_uring workers, 1 worker, 10 conn, 64 B | 221519 | 42.5 µs | 57.3 µs | 0 |
+| thread-per-connection, 10 conn, 64 B | 198230 | 35.8 µs | 76.8 µs | 0 |
+| Boost.Asio 1.83, one io_context, 10 conn, 64 B | 237147 | 38.9 µs | 50.2 µs | 0 |
+| epoll, 4 workers, 100 conn, 64 B, client threads 2 | 369486 | 149.5 µs | 4.13 ms | 0 |
+| epoll, 1 worker, 1000 conn, 64 B, client threads 2 | 188600 | 5.18 ms | 6.62 ms | 0 |
+| 600 s measurement, epoll 2 workers, 32 conn, 64 B | 401951 | 62.5 µs | 139 µs | 0 |
 
-The 1-connection blocking server beat the 1-worker epoll server on this guest. Four workers raised throughput and also raised tail latency; that run used more threads than the guest has CPUs. 10k connections, 1M small messages/s, and a 10-minute soak were not run. During the 1000-connection run the echo process RSS was 21152 kB and it was using about one core (`Threads: 2` in `/proc`).
+The 1-connection blocking server beat the 1-worker epoll server on this guest. Four workers raised throughput and also raised tail latency; that run used more threads than the guest has CPUs. The p99 on that row is a merged histogram, not the max of the two client threads. 1M small messages/s was not reached. 10000 idle connections were held (RSS 177052 kB, 1 worker, no EMFILE). That is not 10000 active conversations. The 600 second row is the only soak that finished; it is not a 1-hour or 24-hour run.
 
 ## Architecture
 
@@ -48,7 +51,7 @@ ctest --test-dir build --output-on-failure
 
 Release, ASan, UBSan, and TSan presets are in `CMakePresets.json`. On this machine `/usr/bin/c++` is Clang and does not find `libstdc++` unless `LIBRARY_PATH` includes the gcc library directory, so the known-good compiler is `g++`.
 
-io_uring turns on when `pkg-config` finds liburing. Otherwise the build says so and the epoll backend remains. Boost.Asio is off unless `-DFLUXNET_ENABLE_ASIO_BASELINE=ON` and Boost is installed. It was not installed here, and no Asio baseline was built.
+io_uring turns on when `pkg-config` finds liburing. Otherwise the build says so and the epoll backend remains. The acceptor stays on epoll even when workers use io_uring. Boost.Asio is a separate binary, `fluxnet_asio_echo`, built with `-DFLUXNET_ENABLE_ASIO_BASELINE=ON` when Boost headers are present. It is not linked into `libfluxnet`. On this machine that baseline was built against Boost 1.83 and the 10-connection row above is that run.
 
 ## Echo
 
@@ -78,7 +81,7 @@ python3 scripts/plot_results.py
 
 ## Tests
 
-33 GoogleTest cases across 9 binaries: fd, socket, codec, queues, pool, histogram, integration (echo, limits, pub/sub, KV), SPSC threads, and an in-process fuzz driver. Debug, ASan, UBSan, and TSan each reported 9/9 ctest binaries passed on this guest. libFuzzer and Valgrind were not available. The 45 second run above is a smoke soak, not the 10-minute, 1-hour, or 24-hour script duration.
+38 GoogleTest cases across 9 binaries: fd, socket, codec, queues, pool, histogram, integration (echo, limits, admission, pub/sub, KV), SPSC threads, and an in-process fuzz driver. Debug, ASan, UBSan, and TSan each reported 9/9 ctest binaries passed on this guest after the admission fix. libFuzzer and Valgrind were not available. The 600 second row above is the soak that finished. The script can take a longer `DURATION`; a 1-hour or 24-hour run was not started.
 
 ## Trade-offs
 
@@ -89,7 +92,7 @@ python3 scripts/plot_results.py
 
 ## Limitations
 
-IPv4 only. No TLS, HTTP, or UDP. No Boost.Asio numbers. No Docker run (the daemon was not installed). No CrashLab repo was present; see `crashlab/INTEGRATION.md`. `perf` is not installed and `perf_event_paranoid` is 2. Details and the host facts are in `LIMITATIONS.md`.
+IPv4 only. No TLS, HTTP, or UDP. No Docker run (the daemon was not installed). No CrashLab repo was present; see `crashlab/INTEGRATION.md`. `perf` is not installed and `perf_event_paranoid` is 2. The pool, gather, and affinity switches were each measured once on the 10-connection shape and none of those single runs showed a benefit worth changing the defaults. Details and the host facts are in `LIMITATIONS.md`.
 
 ## License
 

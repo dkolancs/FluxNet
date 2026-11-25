@@ -11,6 +11,6 @@ What FluxNet can hand to a future harness, once that harness's real interface is
 - Lifecycle the library actually implements: `stop()` drains until `shutdown_timeout`, then `run()` returns. That is application shutdown, not a process restart, and not a client reconnect. The load generator does not reconnect after a failure in the current version.
 - Metrics the library actually keeps: `MetricsSnapshot` in `include/fluxnet/metrics.hpp`.
 
-`docker` and `tc` were not installed here, so no fault injection was executed. `compose.yaml` at the repo root only starts the echo server and the load generator. It is not a CrashLab experiment.
+`docker` and `tc` were not installed here, so no fault injection was executed. `compose.yaml` at the repo root only starts the echo server and the load generator. It is not a CrashLab experiment. `scripts/scale_connections.sh` holds idle TCP connections and records RSS. That is a local socket count, not a CrashLab fault, and it does not invent CrashLab fields.
 
 Status: **Not implemented** as a CrashLab integration. **Blocked by environment** for running one, because the CrashLab repo is not present.

@@ -18,7 +18,7 @@ If a callback throws, the library catches it, logs at warn, and closes that conn
 
 `Connection::send` is only for the owning worker. That is the callback and any task that worker is running.
 
-`Server::send` / `Client::send` from a thread that is not a worker of this object queues the frame and waits up to `shutdown_timeout`. From a *different* worker it does not wait, because two workers blocking on each other can deadlock. `try_send` never waits. `Accepted` from `try_send` means the task was queued. The worker may still refuse it later if the output cap is hit; that shows up as `send_backpressured`.
+`Server::send`, `Server::try_send`, and the `Client` equivalents admit the frame before they return. They do not wait for the kernel to accept the bytes, and they do not wait on another worker's loop. `Accepted` means the full frame is queued and will be written, or the connection will surface a hard error or close. It is not a silent drop. `Backpressured` means nothing from that call was queued: the connection was already at `output_high_watermark`, or the frame would pass `max_pending_output`. `tests/integration/test_admission.cpp` blocks the owner inside `on_connect` and checks that `try_send` stops at the cap.
 
 `SendResult` is `Accepted`, `Backpressured`, `Closed`, or `InvalidMessage`.
 
