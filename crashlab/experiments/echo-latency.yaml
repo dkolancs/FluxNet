@@ -1,0 +1,21 @@
+# Matches CrashLab file.go. Not executed on this guest: the Docker daemon
+# did not start and tc netem is not permitted. fluxnet_crashlab_http is the
+# HTTP entry. It was tested locally without Docker.
+name: echo-latency
+target:
+  service: echo
+fault:
+  type: latency
+  delay: 50ms
+experiment:
+  baseline: 5s
+  duration: 8s
+  recovery: 5s
+entry:
+  url: http://127.0.0.1:8081/
+  service: crashlab-http
+compose: compose.yaml
+expect:
+  error_rate: "< 20%"
+  p95_latency: "< 1000ms"
+  recovery_time: "< 10s"

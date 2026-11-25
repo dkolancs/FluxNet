@@ -29,12 +29,14 @@ int main(int argc, char** argv) {
             config.use_buffer_pool = false;
         } else if (arg == "--no-gather") {
             config.scatter_gather = false;
+        } else if (arg == "--max-connections" && i + 1 < argc) {
+            config.max_connections = static_cast<std::size_t>(std::atoi(argv[++i]));
         } else if (arg == "--least-loaded") {
             config.load_balance = fluxnet::LoadBalance::LeastLoaded;
         } else {
             std::cerr << "usage: fluxnet_echo [--host H] [--port P] [--workers N] [--edge] "
                          "[--uring|--epoll] [--affinity] [--no-pool] [--no-gather] "
-                         "[--least-loaded]\n";
+                         "[--least-loaded] [--max-connections N]\n";
             return 2;
         }
     }

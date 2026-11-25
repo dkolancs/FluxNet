@@ -1,0 +1,3 @@
+perf_event_paranoid=2
+perf package linux-tools-6.12.113 was not found by apt.
+linux-tools-generic was requested in the same apt command and did not install perf.

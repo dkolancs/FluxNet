@@ -78,7 +78,7 @@ README and `docs/` must match the code and the numbers that were measured.
 
 ## Phase 18 — adversarial review
 
-AUDIT.md with severity, evidence, and what was retested. Not release-ready if a critical correctness bug is still open.
+AUDIT.md with severity, evidence, and what was retested. Not release-ready if a critical correctness bug is still open. Docker, perf, and the 24-hour soak stay disclosed if they did not run. The io_uring feature probe runs before worker threads so ThreadSanitizer does not need a liburing suppression.
 
 ## Parallelism
 

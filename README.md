@@ -24,13 +24,15 @@ These numbers are from one KVM guest (4 vCPU, kernel 6.12.113+, g++ 13.3.0, Rele
 | epoll, 1 worker, 1000 conn, 64 B, client threads 2 | 188600 | 5.18 ms | 6.62 ms | 0 |
 | 600 s measurement, epoll 2 workers, 32 conn, 64 B | 401951 | 62.5 µs | 139 µs | 0 |
 
-The 1-connection blocking server beat the 1-worker epoll server on this guest. Four workers raised throughput and also raised tail latency; that run used more threads than the guest has CPUs. The p99 on that row is a merged histogram, not the max of the two client threads. 1M small messages/s was not reached. 10000 idle connections were held (RSS 177052 kB, 1 worker, no EMFILE). That is not 10000 active conversations. The 600 second row is the only soak that finished; it is not a 1-hour or 24-hour run.
+The 1-connection blocking server beat the 1-worker epoll server on this guest. Four workers raised throughput and also raised tail latency; that run used more threads than the guest has CPUs. The p99 on that row is a merged histogram, not the max of the two client threads. 1M small messages/s was not reached. 10000 idle connections were held (RSS 177052 kB, 1 worker, no EMFILE). That is not 10000 active conversations. A later 5000-connection active run is in `results/raw/epoll-1w-c5000-p64.json` (240632 msgs/s, p99 58.2 ms, 0 failures). 10000 active connections are in `results/raw/epoll-1w-c10000-p64.json` (439820 msgs/s, p99 40.4 ms, 0 failures, 0 connect failures) with `--max-connections 20000` so the default cap of 10000 did not reject them. The 600 second row finished earlier (401951 msgs/s, p99 139 µs, 0 failures). A 1-hour run also finished: `results/raw/soak-3600s.json`, 392178 msgs/s, p50 65.0 µs, p99 143 µs, 0 failures, 1411841756 messages, wall clock `2026-11-25T03:00:51Z` to `2026-11-25T04:00:52Z`. The 24-hour soak was not started.
+
+Charts from `results/raw` are `results/plots/throughput.png`, `p99.png`, `latency_vs_connections.png`, and `workers.png`. Three repeats of epoll, 1 worker, 10 connections, 64 bytes were 201612, 203446, and 203478 msgs/s (min, median, max). Eight workers were not run: this guest has 4 CPUs.
 
 ## Architecture
 
 ```mermaid
 flowchart LR
-  acc[Acceptor thread<br/>epoll + signalfd]
+  acc[Acceptor thread<br/>io_uring accept or epoll]
   q1[Bounded queue + eventfd]
   q2[Bounded queue + eventfd]
   w1[Worker 0<br/>epoll or io_uring]
@@ -51,7 +53,7 @@ ctest --test-dir build --output-on-failure
 
 Release, ASan, UBSan, and TSan presets are in `CMakePresets.json`. On this machine `/usr/bin/c++` is Clang and does not find `libstdc++` unless `LIBRARY_PATH` includes the gcc library directory, so the known-good compiler is `g++`.
 
-io_uring turns on when `pkg-config` finds liburing. Otherwise the build says so and the epoll backend remains. The acceptor stays on epoll even when workers use io_uring. Boost.Asio is a separate binary, `fluxnet_asio_echo`, built with `-DFLUXNET_ENABLE_ASIO_BASELINE=ON` when Boost headers are present. It is not linked into `libfluxnet`. On this machine that baseline was built against Boost 1.83 and the 10-connection row above is that run.
+io_uring turns on when `pkg-config` finds liburing. Otherwise the build says so and the epoll backend remains. When workers use io_uring, the acceptor uses its own ring for `IORING_OP_ACCEPT` and falls back to epoll if that ring cannot be opened. `Server::accept_mode()` reports which one ran. Boost.Asio is a separate binary, `fluxnet_asio_echo`, built with `-DFLUXNET_ENABLE_ASIO_BASELINE=ON` when Boost headers are present. It is not linked into `libfluxnet`. On this machine that baseline was built against Boost 1.83 and the 10-connection row above is that run.
 
 ## Echo
 

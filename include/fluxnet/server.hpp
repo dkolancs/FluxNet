@@ -37,6 +37,12 @@ class Server {
     IoBackend active_backend() const noexcept;
     // Empty when the requested backend was used. Otherwise the fallback reason.
     std::string backend_note() const;
+    // "uring" when the acceptor submitted IORING_OP_ACCEPT, otherwise "epoll".
+    std::string accept_mode() const;
+    // Why multishot accept was not used, or why the acceptor ring was not opened.
+    std::string accept_note() const;
+    // Runtime probe of registered buffers and multishot recv. Empty if not probed.
+    std::string uring_probe() const;
     MetricsSnapshot metrics() const;
 
     // Admission finishes before either call returns. Accepted means the frame is

@@ -27,7 +27,7 @@ Partial reads are the loop in `Worker::on_readable`: it keeps going until `EAGAI
 
 ## Readiness vs completion
 
-epoll: the fd can make progress; you issue `recv`/`sendmsg`. io_uring recv/send: the completion *is* the progress, and the buffer must still be there (`src/backends/io_uring/uring.cpp`). Cancel is a completion too (`-ECANCELED` or a separate cancel CQE).
+epoll: the fd can make progress; you issue `recv`/`sendmsg`. io_uring recv/send: the completion *is* the progress, and the buffer must still be there (`src/backends/io_uring/uring.cpp`). Cancel is a completion too (`-ECANCELED` or a separate cancel CQE). The acceptor has its own ring for `IORING_OP_ACCEPT` when the worker backend is io_uring (`Server::accept_mode()`). If that ring fails to open, accept stays on epoll. Multishot recv was probed and not used (`EINVAL`).
 
 ## eventfd, timerfd, signalfd
 

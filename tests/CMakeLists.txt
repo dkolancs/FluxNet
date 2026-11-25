@@ -18,9 +18,11 @@ fluxnet_test(fluxnet_unit_histogram unit/test_histogram.cpp)
 fluxnet_test(fluxnet_integration integration/test_echo.cpp integration/test_limits.cpp integration/test_apps.cpp integration/test_admission.cpp)
 fluxnet_test(fluxnet_concurrency concurrency/test_spsc_threads.cpp)
 fluxnet_test(fluxnet_fuzz fuzz/test_fuzz.cpp)
+fluxnet_test(fluxnet_stress stress/test_stress.cpp)
 
 set_tests_properties(fluxnet_unit_fd fluxnet_unit_socket fluxnet_unit_codec fluxnet_unit_queue
                      fluxnet_unit_pool fluxnet_unit_histogram PROPERTIES LABELS unit)
 set_tests_properties(fluxnet_integration PROPERTIES LABELS integration)
 set_tests_properties(fluxnet_concurrency PROPERTIES LABELS concurrency)
 set_tests_properties(fluxnet_fuzz PROPERTIES LABELS fuzz)
+set_tests_properties(fluxnet_stress PROPERTIES LABELS stress)

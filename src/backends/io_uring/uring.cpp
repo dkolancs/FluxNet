@@ -3,6 +3,7 @@
 #include "observability/logger.hpp"
 
 #include <cerrno>
+#include <cstdlib>
 #include <cstring>
 #include <liburing.h>
 #include <poll.h>
@@ -317,6 +318,12 @@ void UringDriver::run(Worker* worker) {
     io_uring ring{};
     int rc = -1;
     unsigned entries = 256;
+    if (const char* env = std::getenv("FLUXNET_URING_ENTRIES")) {
+        const int parsed = std::atoi(env);
+        if (parsed >= 4 && parsed <= 4096) {
+            entries = static_cast<unsigned>(parsed);
+        }
+    }
     for (int attempt = 0; attempt < 3; ++attempt) {
         rc = io_uring_queue_init(entries, &ring, 0);
         if (rc == 0) {

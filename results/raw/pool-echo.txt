@@ -1,0 +1,2 @@
+pool_acquires=1 pool_reuses=0 pool_allocs=1 pool_bytes_in_use=0 pool_bytes_high_watermark=1024
+nopool_acquires=1 nopool_reuses=0
