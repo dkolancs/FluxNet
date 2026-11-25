@@ -85,7 +85,7 @@ This does not mean the server is faster with the SPSC. The server was not in thi
 - On one connection, the blocking server was faster than epoll (84672 vs 79723 msgs/s).
 - io_uring beat 1-worker epoll on the 10-connection case (221519 vs 207144). One run each. The acceptor was still epoll. Worker recv and send were io_uring.
 - Asio was faster than 1-worker epoll on that same 10-connection shape (237147 vs 207144) with a lower p99 (50.2 µs vs 79.9 µs). One run. Asio used one `io_context` thread. It is not linked into `libfluxnet`.
-- Open-loop, churn, and slow-consumer benchmark modes exist in the generator and were not part of this matrix.
+- The later matrix in the next section did run one open-loop case and one churn case. A slow-read mode exists and is covered by `fluxnet_loadgen_test`, not by this table.
 - `perf` is not installed. No hardware counters were collected.
 - The 600 second measurement is in the soak section. A 1-hour or 24-hour soak was not started.
 
@@ -106,3 +106,28 @@ This does not mean the server is faster with the SPSC. The server was not in thi
 | payload bytes | 15434911040 |
 
 `results/legacy-unmerged/soak-45s.json` is a 45 second run from before the histogram merge. It is not this soak.
+
+## Later short matrix
+
+`scripts/benchmark_matrix.sh` on the same guest, Release, duration 2 s, warmup 0.5 s, one server at a time. The measurement window starts after the generator finishes connecting. These are single samples except the three repeats. Failures were 0 in every file below.
+
+| File | msgs/s | p99 ns | notes |
+| --- | --- | --- | --- |
+| `epoll-1w-c10-p256.json` | 189796 | 89088 | 1 worker, 10 conn, 256 B |
+| `epoll-1w-c10-p4096.json` | 152776 | 94208 | 1 worker, 10 conn, 4096 B |
+| `epoll-1w-c10-p65536.json` | 20503.5 | 532480 | 1 worker, 10 conn, 64 KiB |
+| `epoll-2w-c100-p64.json` | 400792 | 442368 | 2 workers, 100 conn, 64 B, 2 client threads |
+| `epoll-1w-c10-p64-r1.json` | 201612 | 82944 | repeat 1 of the 10-conn 64 B case |
+| `epoll-1w-c10-p64-r2.json` | 203478 | 82944 | repeat 2 |
+| `epoll-1w-c10-p64-r3.json` | 203446 | 83968 | repeat 3 |
+| `epoll-1w-c10-p64-openloop.json` | 50000 | 52224 | `--rate 50000`, `behind_schedule` 983 |
+| `epoll-1w-c4-p64-churn.json` | 191842 | 40960 | 4 conn, `--churn-seconds 0.5`, connect_failures 0 |
+| `epoll-1w-c5000-p64.json` | 240632 | 58195968 | 1 worker, 5000 conn, 4 client threads, p50 12189696 ns |
+
+Repeat msgs/s min 201612, median 203446, max 203478. That spread is about 1 percent. It is not a confidence interval for the other rows.
+
+Eight workers were not run. `results/raw/workers-8-not-applicable.txt` records that this guest has 4 CPUs. 10000 active senders were not run after the 5000-connection row.
+
+`results/raw/fault-cpu-before.json`, `fault-cpu-during.json`, and `fault-cpu-after.json` are a local `stress-ng --cpu 2` run, not CrashLab: 201611, 189836, and 202305 msgs/s, all with 0 failures. `tc` returned `EPERM`, and the Docker daemon socket was not created, so netem and compose were not run.
+
+Charts: `results/plots/throughput.png`, `p99.png`, `latency_vs_connections.png` (names `epoll-1w-cN-p64`), `workers.png` (names `epoll-Nw-c100-p64`). `python3 scripts/plot_results.py` drew them from `results/raw` only.

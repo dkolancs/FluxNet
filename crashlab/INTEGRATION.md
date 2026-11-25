@@ -1,16 +1,17 @@
-# CrashLab boundary
+# CrashLab
 
-No CrashLab repository, CLI, schema, or config was found on this machine. Searches covered `/workspace`, `/home`, `/opt`, and `/usr/local`.
+The real project is `github.com/dkolancs/CrashLab` (public, seen via `gh search repos crashlab --owner dkolancs` and `gh repo list`). It was not on disk under `/workspace`, `/home`, `/opt`, or `/usr/local`. The schema below is from `internal/experiment/file.go` in that repository, not invented here.
 
-Because the real schema is absent, this directory does not invent experiment fields, fault names, or report layouts. Doing that would look like an integration and would not be one.
+An experiment file has `name`, `target.service`, `fault.type` (`latency`, `loss`, `kill`, or `cpu`), optional `fault.delay` / `fault.percent`, `experiment.baseline` / `duration` / `recovery`, `entry.url` (HTTP), `entry.service`, `compose`, and `expect` assertions (`error_rate`, `p95_latency`, `recovery_time`, optional `mode: pass|fail`).
 
-What FluxNet can hand to a future harness, once that harness's real interface is known:
+`crashlab/experiments/echo-latency.yaml` uses those fields and points at this repo's `compose.yaml` service `echo`. It was not executed.
 
-- Process under test: `fluxnet_echo`, `fluxnet_pubsub`, or `fluxnet_kv`, bound to `127.0.0.1`.
-- Load: `fluxnet_bench`, which writes JSON with completed messages, failures, and latency percentiles.
-- Lifecycle the library actually implements: `stop()` drains until `shutdown_timeout`, then `run()` returns. That is application shutdown, not a process restart, and not a client reconnect. The load generator does not reconnect after a failure in the current version.
-- Metrics the library actually keeps: `MetricsSnapshot` in `include/fluxnet/metrics.hpp`.
+Why it was not run:
 
-`docker` and `tc` were not installed here, so no fault injection was executed. `compose.yaml` at the repo root only starts the echo server and the load generator. It is not a CrashLab experiment. `scripts/scale_connections.sh` holds idle TCP connections and records RSS. That is a local socket count, not a CrashLab fault, and it does not invent CrashLab fields.
+- `docker info` failed: `unix:///var/run/docker.sock` does not exist. `apt` installed `docker.io`, then `invoke-rc.d` reported `policy-rc.d denied execution of start`, so the daemon never came up.
+- CrashLab's entry probe is an HTTP URL. `fluxnet_echo` speaks the 8-byte TCP frame protocol, not HTTP, so a successful `crashlab experiment run` would not be measuring this library's messages even if Docker were up.
+- `tc qdisc add dev lo root netem delay 1ms` returned `RTNETLINK answers: Operation not permitted`.
 
-Status: **Not implemented** as a CrashLab integration. **Blocked by environment** for running one, because the CrashLab repo is not present.
+`experiments/faults/cpu_stress.sh` is a separate local script. It is not a CrashLab command. It ran `stress-ng --cpu 2` around three 2-second echo benchmarks. The JSON files are `results/raw/fault-cpu-before.json`, `fault-cpu-during.json`, and `fault-cpu-after.json`.
+
+Application `Server::stop()` drains until `shutdown_timeout` and then `run()` returns. That is not a process restart and not a client reconnect. The load generator reconnects only when `--churn-seconds` is set. A dropped connection otherwise stays a connect or message failure.

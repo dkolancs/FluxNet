@@ -4,7 +4,7 @@ This is an account of the tree in this workspace and the runs that produced `res
 
 ## The machine
 
-A KVM guest, kernel 6.12.113+, 4 vCPUs, about 16 GB RAM, no swap. `ulimit -n` was 524288. `perf` was missing and `perf_event_paranoid` was 2. Docker, `tc`, `stress-ng`, Valgrind, and libFuzzer were not installed. liburing 2.5 was already present for the later builds. Boost 1.83 headers were installed from `libboost-dev` so the Asio baseline could be compiled. No CrashLab checkout existed outside this repo's `crashlab/INTEGRATION.md`, which is only a boundary note.
+A KVM guest, kernel 6.12.113+, 4 vCPUs, about 16 GB RAM, no swap. `ulimit -n` was 524288. `perf` was still missing after apt could not find `linux-tools-6.12.113`, and `perf_event_paranoid` was 2. Docker's package installed, but the daemon did not start. `tc` returned EPERM. `stress-ng` and Valgrind did run. libFuzzer's runtime library was not installed. liburing 2.5 was present. Boost 1.83 headers were installed from `libboost-dev` so the Asio baseline could be compiled. CrashLab's repository is `github.com/dkolancs/CrashLab`. Its experiment schema was read. The matching YAML in this tree was not executed.
 
 `/usr/bin/c++` was Clang and could not link `libstdc++`. `g++` 13.3.0 could. The builds used g++ on purpose.
 
@@ -32,6 +32,8 @@ The SPSC microbenchmark was 1.17 ns versus 8.72 ns for an uncontended mutex push
 
 ## What was left out on purpose
 
-No fixed io_uring buffers, and no io_uring accept. The listen socket stays on level-triggered epoll so EMFILE can drop interest. No claim that the pool or affinity is faster. No CrashLab report, because there was no schema to match. No license file. The README suggests MIT if someone adds one later.
+Registered buffers probed successfully and are not on the data path. Multishot recv returned EINVAL and is not used. The acceptor now submits `IORING_OP_ACCEPT` on its own ring when the worker backend is io_uring, and falls back to epoll if that ring fails. EMFILE still pauses accepts for 50 ms, via a timeout completion. No claim that the pool or affinity is faster. The CrashLab YAML matches the real schema and was not run, because Docker did not start and the probe is HTTP. A local `stress-ng` CPU run is in `results/raw/fault-cpu-*.json` and is labeled as not CrashLab. No license file. The README suggests MIT if someone adds one later.
+
+A later 2 second matrix is in `BENCHMARKS.md`. Three repeats of the 10-connection 64-byte epoll case were 201612, 203446, and 203478 msgs/s. Five thousand active connections did 240632 msgs/s with p99 about 58 ms. That is not 1M msgs/s, and it is not 10000 active connections.
 
 The benchmark JSON says git `ecc7a98`, which is the commit that contained the admission fix and the Asio baseline when the binaries were run.

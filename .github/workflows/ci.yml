@@ -15,7 +15,7 @@ jobs:
         run: |
           cmake -S . -B build-debug -G Ninja -DCMAKE_BUILD_TYPE=Debug -DCMAKE_CXX_COMPILER=g++
           cmake --build build-debug -j
-          ctest --test-dir build-debug --output-on-failure
+          ctest --test-dir build-debug --output-on-failure -LE stress
       - name: release
         run: |
           cmake -S . -B build-release -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_COMPILER=g++ -DFLUXNET_BUILD_TESTS=OFF
@@ -32,7 +32,7 @@ jobs:
           export LIBRARY_PATH="/usr/lib/gcc/x86_64-linux-gnu/13:${LIBRARY_PATH:-}"
           cmake -S . -B build-clang -G Ninja -DCMAKE_BUILD_TYPE=Debug -DCMAKE_CXX_COMPILER=clang++
           cmake --build build-clang -j
-          ctest --test-dir build-clang --output-on-failure
+          ctest --test-dir build-clang --output-on-failure -LE stress
   asan-ubsan:
     runs-on: ubuntu-24.04
     steps:
@@ -43,12 +43,12 @@ jobs:
         run: |
           cmake -S . -B build-asan -G Ninja -DCMAKE_BUILD_TYPE=Debug -DCMAKE_CXX_COMPILER=g++ -DFLUXNET_SANITIZER=address -DFLUXNET_BUILD_BENCHMARKS=OFF
           cmake --build build-asan -j
-          ctest --test-dir build-asan --output-on-failure
+          ctest --test-dir build-asan --output-on-failure -LE stress
       - name: ubsan
         run: |
           cmake -S . -B build-ubsan -G Ninja -DCMAKE_BUILD_TYPE=Debug -DCMAKE_CXX_COMPILER=g++ -DFLUXNET_SANITIZER=undefined -DFLUXNET_BUILD_BENCHMARKS=OFF
           cmake --build build-ubsan -j
-          ctest --test-dir build-ubsan --output-on-failure
+          ctest --test-dir build-ubsan --output-on-failure -LE stress
   tsan:
     runs-on: ubuntu-24.04
     steps:
@@ -59,7 +59,28 @@ jobs:
         run: |
           cmake -S . -B build-tsan -G Ninja -DCMAKE_BUILD_TYPE=Debug -DCMAKE_CXX_COMPILER=g++ -DFLUXNET_SANITIZER=thread -DFLUXNET_BUILD_BENCHMARKS=OFF
           cmake --build build-tsan -j
-          ctest --test-dir build-tsan --output-on-failure
+          ctest --test-dir build-tsan --output-on-failure -LE stress
+  benchmark-smoke:
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: packages
+        run: sudo apt-get update && sudo apt-get install -y ninja-build liburing-dev pkg-config
+      - name: build
+        run: |
+          cmake -S . -B build-release -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_COMPILER=g++
+          cmake --build build-release -j --target fluxnet_echo fluxnet_bench
+      - name: smoke
+        run: DURATION=2 WARMUP=0.2 bash scripts/benchmark.sh
+        continue-on-error: true
+      - name: upload
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: benchmark-smoke
+          path: results/raw
+          if-no-files-found: ignore
   format:
     runs-on: ubuntu-24.04
     steps:

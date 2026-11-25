@@ -70,9 +70,9 @@ Integration in each of those was about 15 seconds. No sanitizer suppression was 
 
 If the connection closes before the owner writes, queued frames are dropped. The caller was told `Accepted`. The close or `on_disconnect` is the signal. A live connection does not drop an accepted frame to satisfy the cap.
 
-### Low — acceptor is epoll even when workers are io_uring
+### Low — io_uring accept and epoll accept are different paths
 
-Deliberate. `EMFILE` drops listen interest for 50 ms. That was not reimplemented as io_uring accept. A benchmark that says "io_uring" means worker recv/send.
+When the worker backend is io_uring, the acceptor opens its own ring and submits multishot `IORING_OP_ACCEPT` unless the kernel rejects that flag. `-EMFILE` and `-ENFILE` wait on a 50 ms timeout completion instead of `epoll_ctl` delete. If ring init fails, the old epoll loop still runs and `accept_mode()` is `epoll`. The file `results/raw/uring-1w-c10-p64.json` predates acceptor io_uring. `Echo.IoUringAcceptMode` and `Echo.IoUringShutdownWithAcceptInFlight` cover the new path on this guest. A completion that arrives after cancel and carries a new fd is closed and not handed to a worker. Multishot recv was not adopted: the probe completion was `-22` (`EINVAL`).
 
 ### Low — one global log level and `SIGPIPE` ignored for the process
 
@@ -89,4 +89,7 @@ The slot is closed to new admits before the callback so a send cannot observe a 
 - TSan passed the test suite, including cross-thread `try_send` while the owner was blocked. It did not run during the soak.
 - 1M messages/s was not reached. The highest FluxNet figure in `results/raw/` is 401951 msgs/s over 600 seconds, and 369486 msgs/s on the 2 second 4-worker run.
 - Single 2 second samples are not a confidence interval. The pool, gather, and affinity comparisons are one run each and were treated as noise.
-- `perf`, Valgrind, libFuzzer, Docker, and CrashLab were not available. No counters, no fault-injection schema, and no container run are claimed.
+- 1M messages/s was still not reached. The 5000-connection active run was 240632 msgs/s with a much larger tail (`results/raw/epoll-1w-c5000-p64.json`).
+- ASan, UBSan, and TSan were rerun after acceptor io_uring (`ctest -LE stress`, 9/9 each). `fluxnet_stress` was then run under the ASan and TSan binaries and passed. The 600 second soak was not a sanitizer run.
+- Valgrind on `fluxnet_unit_codec` reported 0 errors. libFuzzer did not link. `perf` was not installed. Docker's daemon did not start. `tc` was EPERM. CrashLab's schema was read and the YAML was not executed. The `stress-ng` numbers are a local CPU run, not a CrashLab report.
+- This is still not release-ready.

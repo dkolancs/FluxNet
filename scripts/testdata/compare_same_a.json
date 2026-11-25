@@ -1,0 +1,10 @@
+{
+  "cpu": "test-cpu",
+  "cores": 4,
+  "compiler": "test-compiler",
+  "payload": 64,
+  "connections": 10,
+  "msgs_per_s": 1000.0,
+  "p99_ns": 10000,
+  "failures": 0
+}

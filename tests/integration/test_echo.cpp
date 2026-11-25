@@ -204,6 +204,64 @@ TEST(Echo, IoUringIfAvailable) {
     EXPECT_TRUE(gate.wait_for(1, std::chrono::seconds(2))) << running.server.backend_note();
 }
 
+TEST(Echo, IoUringAcceptMode) {
+    fluxnet::ServerConfig config = echo_config(1, fluxnet::EpollTrigger::Level);
+    config.io_backend = fluxnet::IoBackend::IoUring;
+    Running running(config);
+    running.server.set_on_message([](fluxnet::Connection& conn, fluxnet::MessageView msg) {
+        conn.send(msg.type(), msg.payload(), msg.flags());
+    });
+    running.start();
+    if (running.server.active_backend() != fluxnet::IoBackend::IoUring) {
+        GTEST_SKIP() << running.server.backend_note();
+    }
+    const std::string mode = running.server.accept_mode();
+    EXPECT_TRUE(mode == "uring" || mode == "epoll") << mode;
+    if (mode == "epoll") {
+        EXPECT_FALSE(running.server.accept_note().empty());
+        return;
+    }
+    EXPECT_FALSE(running.server.uring_probe().empty());
+    fluxnet::ClientConfig client_config;
+    client_config.host = "127.0.0.1";
+    client_config.port = running.server.bound_port();
+    fluxnet::test::Gate gate;
+    RunningClient client(client_config);
+    client.client.set_on_message(
+        [&](fluxnet::Connection&, fluxnet::MessageView) { gate.notify(); });
+    client.start();
+    auto id = client.client.connect();
+    ASSERT_TRUE(id.valid());
+    std::vector<std::byte> payload{std::byte{'a'}};
+    ASSERT_EQ(client.client.send(id, fluxnet::MessageType::Data, payload, 0),
+              fluxnet::SendResult::Accepted);
+    EXPECT_TRUE(gate.wait_for(1, std::chrono::seconds(2))) << running.server.accept_note();
+}
+
+TEST(Echo, IoUringShutdownWithAcceptInFlight) {
+    fluxnet::ServerConfig config = echo_config(1, fluxnet::EpollTrigger::Level);
+    config.io_backend = fluxnet::IoBackend::IoUring;
+    config.shutdown_timeout = std::chrono::milliseconds(200);
+    Running running(config);
+    running.start();
+    if (running.server.active_backend() != fluxnet::IoBackend::IoUring) {
+        GTEST_SKIP() << running.server.backend_note();
+    }
+    if (running.server.accept_mode() != "uring") {
+        GTEST_SKIP() << running.server.accept_note();
+    }
+    running.server.stop();
+    ASSERT_TRUE(running.server.wait_until_running(std::chrono::seconds(2)) ||
+                running.server.state() == fluxnet::ServerState::Stopped ||
+                running.server.state() == fluxnet::ServerState::Draining);
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+    while (running.server.state() != fluxnet::ServerState::Stopped &&
+           std::chrono::steady_clock::now() < deadline) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+    EXPECT_EQ(running.server.state(), fluxnet::ServerState::Stopped);
+}
+
 TEST(Echo, LargePayloadRoundTrip) {
     auto config = echo_config(1, fluxnet::EpollTrigger::Level);
     config.shutdown_timeout = std::chrono::milliseconds(100);

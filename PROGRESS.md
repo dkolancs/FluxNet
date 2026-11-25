@@ -2,7 +2,7 @@
 
 ## Authorship
 
-Repo-local `user.name` is `Divith Reddy Kolan` and `user.email` is `dkolan@asu.edu`. New commits on `cursor/fluxnet-correctness-d096` use that identity and do not carry a Co-authored-by trailer. Nothing was pushed. The initial commit still has a historical Co-authored-by line and was not rewritten.
+This completion branch is `cursor/fluxnet-completion`, cut from `origin/main` at `54f1df7`. Repo-local `user.name` is `Divith Reddy Kolan` and `user.email` is `dkolan@asu.edu`. Nothing in this pass was pushed. The initial commit still has a historical Co-authored-by line and was not rewritten.
 
 ## Feature status
 
@@ -19,7 +19,7 @@ Repo-local `user.name` is `Divith Reddy Kolan` and `user.email` is `dkolan@asu.e
 | Send admission before `Accepted` | Implemented and verified (`Admission.TrySendDoesNotAcceptPastCap`) |
 | signalfd shutdown, lifecycle states | Implemented and verified |
 | Public server/client, echo example | Implemented and verified |
-| io_uring worker recv/send/cancel, runtime fallback | Implemented and verified (`Echo.IoUringIfAvailable` did not skip; 10-conn bench ran). Async accept is not implemented; the acceptor stays on epoll |
+| io_uring worker recv/send/cancel plus acceptor `IORING_OP_ACCEPT` | Implemented and verified (`Echo.IoUringIfAvailable`, `Echo.IoUringAcceptMode`, `Echo.IoUringShutdownWithAcceptInFlight`). Multishot accept was accepted on this guest (`accept_note` empty). Multishot recv probe returned EINVAL and is not used. Epoll accept remains the fallback if the acceptor ring fails |
 | CPU affinity flag, default off | Implemented and verified as "no benefit on one 10-connection run". Flag stays off. No perf counters |
 | Pub/sub and KV examples | Implemented and verified. Disconnect removes the subscription. TSan passed |
 | Load generator, merged histogram, JSON | Implemented and verified. Old unmerged files are in `results/legacy-unmerged/` |
@@ -30,8 +30,10 @@ Repo-local `user.name` is `Divith Reddy Kolan` and `user.email` is `dkolan@asu.e
 | 1 hour and 24 hour soaks | Not run. `scripts/soak.sh` accepts `DURATION` |
 | Dockerfile, compose.yaml | Implemented but partially verified (files exist; `docker` is not installed) |
 | GitHub Actions workflow | Implemented but partially verified (yaml matches the commands; Actions did not run here) |
-| CrashLab | Blocked by environment. No CrashLab repo. `crashlab/INTEGRATION.md` is only a boundary |
-| libFuzzer, Valgrind, perf counters | Blocked by environment |
+| CrashLab | Schema read from `github.com/dkolancs/CrashLab`. `crashlab/experiments/echo-latency.yaml` matches it and was not executed: Docker daemon did not start, and the entry probe is HTTP. Local `stress-ng` run is in `results/raw/fault-cpu-*.json` and is not CrashLab |
+| libFuzzer | Blocked. `clang -fsanitize=fuzzer` did not link (`libclang_rt.fuzzer` missing) |
+| Valgrind on `fluxnet_unit_codec` | Implemented and verified. 0 errors. Integration suite not run under Valgrind |
+| perf counters | Blocked. `perf` not installed; `linux-tools-6.12.113` not in apt; `perf_event_paranoid` is 2 |
 | 1M small messages/s | Not reached. Highest FluxNet figure in `results/raw/` is 401951 msgs/s over 600 seconds |
 
 ## Commands that passed

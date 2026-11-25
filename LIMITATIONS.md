@@ -13,11 +13,13 @@ Facts below were read on this machine during this session. They are not a generi
 - Cache as reported by `lscpu`: L1d 192 KiB, L1i 256 KiB, L2 8 MiB, L3 480 MiB. The L3 figure is the hypervisor's report and is not treated as a measurement of this guest's exclusive cache.
 - RAM: `MemTotal` 16387328 kB (about 15.6 GiB). `free -h` showed about 15 GiB total. No swap.
 - `ulimit -n`: 524288. `ulimit -u`: 63994. `ulimit -l` (max locked memory): 8192 KiB.
-- `perf_event_paranoid`: 2. `perf` is not installed. No hardware counters and no flame graphs were collected. Profile script records that and exits.
-- `valgrind` is not installed.
-- `docker` is not installed. Dockerfile and compose.yaml are unchecked on this machine.
-- `tc`, `stress`, and `stress-ng` are not installed. No netem fault injection was run.
-- CrashLab: searched `/workspace`, `/home`, `/opt`, `/usr/local` for `*crashlab*` and found nothing. There is no CrashLab CLI or schema in this environment. `crashlab/INTEGRATION.md` is only a boundary note. No CrashLab experiment was run.
+- `perf_event_paranoid`: 2. `perf` is still not installed. `apt` could not find `linux-tools-6.12.113`. `results/raw/perf.txt` records that. No hardware counters and no flame graphs.
+- `valgrind` is installed. `valgrind --leak-check=full` on `fluxnet_unit_codec` reported 0 errors and 0 bytes in use at exit. The integration suite was not run under Valgrind.
+- `docker.io` is installed. The daemon did not start (`policy-rc.d denied execution of start`, no `/var/run/docker.sock`). `compose.yaml` was not executed.
+- `tc` is installed. `tc qdisc add dev lo root netem delay 1ms` returned `Operation not permitted`.
+- `stress-ng` is installed and was used by `experiments/faults/cpu_stress.sh`. That is not CrashLab.
+- CrashLab: the repository `github.com/dkolancs/CrashLab` exists. It was not cloned onto this machine. `crashlab/experiments/echo-latency.yaml` matches its file schema and was not run. See `crashlab/INTEGRATION.md`.
+- libFuzzer: `clang -fsanitize=fuzzer` failed to link (`libclang_rt.fuzzer-x86_64.a` missing, and this Clang also did not find `-lstdc++`). The in-process fuzz driver remains the fuzz test.
 - Git identity for new commits: `Divith Reddy Kolan <dkolan@asu.edu>`, repo-local config only. Nothing was pushed. The initial commit still contains a historical `Co-authored-by` trailer. It was not rewritten. A local commit-msg hook tries to append `Co-authored-by: dkolancs <dkolancs@users.noreply.github.com>`; commits in this pass were created with that hook disabled so the trailer is not on the new commits.
 
 ## Toolchain (after installing missing packages)
@@ -58,7 +60,7 @@ libFuzzer was not used. Protocol fuzzing is a deterministic in-process driver.
 - `Connection` must not be used off the owning worker. Cross-thread sends go through `Server`/`Client`.
 - Blocking `send` from a worker thread to a different worker does not wait (deadlock avoidance).
 - io_uring does not use fixed buffers, multishot recv, or zero-copy send. At most one recv and one send are in flight per connection.
-- The acceptor is epoll even when the worker backend is io_uring.
+- When the worker backend is io_uring, the acceptor uses its own ring for accept. If that ring fails to open, accept stays on epoll. Multishot recv was probed and returned `EINVAL` (-22) and is not used. Registered buffers probed successfully and are not used on the data path.
 - `close` is not retried after `EINTR` (Linux fd-release behavior).
 - Pool memory retained up to `pool_max_per_class` per class per worker is intentional.
 - Cross-thread task memory is bounded by `queue_capacity * max_frame_size` per worker, which can be large at the defaults (1024 * 1 MiB). Hot-path echo does not use that queue.
@@ -69,7 +71,7 @@ libFuzzer was not used. Protocol fuzzing is a deterministic in-process driver.
 
 ## Idle connections
 
-`scripts/scale_connections.sh` held 10000 idle connections to a 1-worker echo server. `connected=10000 failed=0`. Server RSS was 177052 kB, `Threads` 2. No EMFILE was logged. Those sockets were not sending. The active-message runs are the benchmark JSON files, and the largest of those is 1000 connections.
+`scripts/scale_connections.sh` held 10000 idle connections to a 1-worker echo server. `connected=10000 failed=0`. Server RSS was 177052 kB, `Threads` 2. No EMFILE was logged. Those sockets were not sending. The active-message runs are the benchmark JSON files. `results/raw/epoll-1w-c5000-p64.json` is 5000 connections actively sending (240632 msgs/s, p99 about 58 ms, 0 failures). 10000 active senders were not run. Eight worker threads were not run on this 4-CPU guest.
 
 ## Authorship
 

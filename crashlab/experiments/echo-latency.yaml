@@ -1,0 +1,22 @@
+# Matches CrashLab's experiment file schema (name, target.service, fault.type,
+# fault.delay, experiment windows, entry, compose, expect). Not executed here:
+# the Docker daemon cannot start in this guest, and CrashLab's entry probe is
+# an HTTP URL while fluxnet_echo speaks the binary TCP frame protocol.
+name: echo-latency
+target:
+  service: echo
+fault:
+  type: latency
+  delay: 50ms
+experiment:
+  baseline: 5s
+  duration: 8s
+  recovery: 5s
+entry:
+  url: http://127.0.0.1:9000/
+  service: echo
+compose: compose.yaml
+expect:
+  error_rate: "< 20%"
+  p95_latency: "< 1000ms"
+  recovery_time: "< 10s"

@@ -8,9 +8,11 @@
 #include "net/socket.hpp"
 #include "observability/logger.hpp"
 
+#include <poll.h>
 #include <pthread.h>
 #include <sched.h>
 #include <sys/signalfd.h>
+#include <sys/socket.h>
 #include <unistd.h>
 
 #include <barrier>
@@ -18,6 +20,8 @@
 #include <cstdio>
 #include <cstring>
 #include <fstream>
+#include <memory>
+#include <optional>
 #include <stdexcept>
 #include <vector>
 
@@ -59,6 +63,65 @@ IoBackend resolve_backend(IoBackend requested, std::string& note) {
     return IoBackend::IoUring;
 #endif
 }
+
+#ifdef FLUXNET_HAS_IO_URING
+std::string probe_uring_features() {
+    std::string note;
+    io_uring ring{};
+    const int init = io_uring_queue_init(8, &ring, 0);
+    if (init < 0) {
+        return std::string("feature probe io_uring_queue_init: ") + std::strerror(-init);
+    }
+    alignas(64) char storage[4096];
+    iovec iov{};
+    iov.iov_base = storage;
+    iov.iov_len = sizeof(storage);
+    const int registered = io_uring_register_buffers(&ring, &iov, 1);
+    if (registered < 0) {
+        note += "register_buffers=" + std::string(std::strerror(-registered));
+    } else {
+        note += "register_buffers=ok";
+        io_uring_unregister_buffers(&ring);
+    }
+    int sv[2] = {-1, -1};
+    if (::socketpair(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0, sv) != 0) {
+        note += " recv_multishot=socketpair_failed";
+    } else {
+        io_uring_sqe* sqe = io_uring_get_sqe(&ring);
+        io_uring_prep_recv_multishot(sqe, sv[0], storage, sizeof(storage), 0);
+        io_uring_sqe_set_data64(sqe, 1);
+        io_uring_submit(&ring);
+        io_uring_cqe* cqe = nullptr;
+        __kernel_timespec ts{};
+        ts.tv_nsec = 20'000'000L;
+        const int waited = io_uring_wait_cqe_timeout(&ring, &cqe, &ts);
+        if (waited == -ETIME || waited == -EAGAIN) {
+            note += " recv_multishot=accepted_pending";
+            if (io_uring_sqe* cancel = io_uring_get_sqe(&ring)) {
+                io_uring_prep_cancel64(cancel, 1, 0);
+                io_uring_sqe_set_data64(cancel, 2);
+                io_uring_submit(&ring);
+            }
+            for (int i = 0; i < 4; ++i) {
+                const int drained = io_uring_wait_cqe_timeout(&ring, &cqe, &ts);
+                if (drained < 0) {
+                    break;
+                }
+                io_uring_cqe_seen(&ring, cqe);
+            }
+        } else if (waited < 0) {
+            note += " recv_multishot=wait:" + std::string(std::strerror(-waited));
+        } else {
+            note += " recv_multishot=" + std::to_string(cqe->res);
+            io_uring_cqe_seen(&ring, cqe);
+        }
+        ::close(sv[0]);
+        ::close(sv[1]);
+    }
+    io_uring_queue_exit(&ring);
+    return note;
+}
+#endif
 
 } // namespace
 
@@ -141,6 +204,275 @@ struct Server::Impl {
             cv.notify_all();
         }
         run_thread = {};
+    }
+
+    void adopt_accepted(int raw_fd) {
+        detail::Socket accepted{detail::FileDescriptor(raw_fd)};
+        if (config.tcp_nodelay) {
+            accepted.set_nodelay(true);
+        }
+        const int fd = accepted.release().release();
+        const auto prev = active.fetch_add(1, std::memory_order_relaxed);
+        if (prev >= config.max_connections || workers.empty()) {
+            active.fetch_sub(1, std::memory_order_relaxed);
+            ::close(fd);
+            rejected.add();
+            return;
+        }
+        detail::Worker* worker = pick_worker();
+        if (worker == nullptr || !worker->try_handoff_fd(fd)) {
+            ::close(fd);
+            active.fetch_sub(1, std::memory_order_relaxed);
+            dropped.add();
+            return;
+        }
+        accepts.add();
+    }
+
+    // Returns true after the uring acceptor has run to completion. False means
+    // the ring could not be opened and the caller must use the epoll loop.
+    bool prepare_uring_accept() {
+#ifndef FLUXNET_HAS_IO_URING
+        accept_note = "liburing was not found at build time";
+        accept_mode = "epoll";
+        return false;
+#else
+        auto ring = std::make_unique<io_uring>();
+        const int init = io_uring_queue_init(64, ring.get(), 0);
+        if (init < 0) {
+            accept_note = std::string("acceptor io_uring_queue_init: ") + std::strerror(-init);
+            accept_mode = "epoll";
+            return false;
+        }
+        accept_ring = std::move(ring);
+        uring_probe = probe_uring_features();
+        accept_mode = "uring";
+        // A nonblocking listen socket makes IORING_OP_ACCEPT complete with
+        // EAGAIN whenever the backlog is empty. Blocking lets the kernel wait.
+        // Accepted sockets are still SOCK_NONBLOCK via the accept flags.
+        listen.set_nonblocking(false);
+        return true;
+#endif
+    }
+
+    void close_accept_ring() {
+#ifdef FLUXNET_HAS_IO_URING
+        if (accept_ring) {
+            io_uring_queue_exit(accept_ring.get());
+            accept_ring.reset();
+        }
+#endif
+    }
+
+    bool try_acceptor_uring() {
+#ifndef FLUXNET_HAS_IO_URING
+        return false;
+#else
+        if (!accept_ring) {
+            return false;
+        }
+        struct RingCloser {
+            Impl* self = nullptr;
+            ~RingCloser() {
+                if (self != nullptr) {
+                    self->close_accept_ring();
+                }
+            }
+        } closer{this};
+
+        constexpr std::uint64_t kWake = 1;
+        constexpr std::uint64_t kAccept = 2;
+        constexpr std::uint64_t kSignal = 3;
+        constexpr std::uint64_t kPause = 4;
+        constexpr std::uint64_t kCancel = 5;
+
+        io_uring* ring = accept_ring.get();
+        auto next_sqe = [&]() -> io_uring_sqe* {
+            io_uring_sqe* sqe = io_uring_get_sqe(ring);
+            if (sqe == nullptr) {
+                io_uring_submit(ring);
+                sqe = io_uring_get_sqe(ring);
+            }
+            return sqe;
+        };
+
+        bool use_multishot = true;
+        int accept_inflight = 0;
+        int pause_inflight = 0;
+        bool paused = false;
+        bool cancel_posted = false;
+        sockaddr_in peer{};
+        socklen_t peer_len = sizeof(peer);
+        __kernel_timespec pause_ts{};
+
+        auto arm_wake = [&]() {
+            if (io_uring_sqe* sqe = next_sqe()) {
+                io_uring_prep_poll_add(sqe, wake.fd(), POLLIN);
+                io_uring_sqe_set_data64(sqe, kWake);
+            }
+        };
+        auto arm_signal = [&]() {
+            if (!signal_fd) {
+                return;
+            }
+            if (io_uring_sqe* sqe = next_sqe()) {
+                io_uring_prep_poll_add(sqe, signal_fd.get(), POLLIN);
+                io_uring_sqe_set_data64(sqe, kSignal);
+            }
+        };
+        auto arm_accept = [&]() {
+            if (paused || accept_inflight > 0 || stop_flag.load(std::memory_order_acquire)) {
+                return;
+            }
+            peer_len = sizeof(peer);
+            if (io_uring_sqe* sqe = next_sqe()) {
+                if (use_multishot) {
+                    io_uring_prep_multishot_accept(sqe, listen.fd(),
+                                                   reinterpret_cast<sockaddr*>(&peer), &peer_len,
+                                                   SOCK_NONBLOCK | SOCK_CLOEXEC);
+                } else {
+                    io_uring_prep_accept(sqe, listen.fd(), reinterpret_cast<sockaddr*>(&peer),
+                                         &peer_len, SOCK_NONBLOCK | SOCK_CLOEXEC);
+                }
+                io_uring_sqe_set_data64(sqe, kAccept);
+                accept_inflight = 1;
+            }
+        };
+        auto arm_pause = [&]() {
+            if (pause_inflight > 0) {
+                return;
+            }
+            pause_ts.tv_sec = 0;
+            pause_ts.tv_nsec = 50'000'000L;
+            if (io_uring_sqe* sqe = next_sqe()) {
+                io_uring_prep_timeout(sqe, &pause_ts, 0, 0);
+                io_uring_sqe_set_data64(sqe, kPause);
+                pause_inflight = 1;
+            }
+        };
+
+        arm_wake();
+        arm_signal();
+        arm_accept();
+
+        std::optional<std::chrono::steady_clock::time_point> stop_since;
+        while (true) {
+            io_uring_submit(ring);
+            io_uring_cqe* cqe = nullptr;
+            __kernel_timespec wait{};
+            wait.tv_nsec = 200'000'000L;
+            const int waited = io_uring_wait_cqe_timeout(ring, &cqe, &wait);
+            if (waited == -ETIME || waited == -EAGAIN) {
+                if (stop_flag.load(std::memory_order_acquire) && accept_inflight == 0 &&
+                    pause_inflight == 0) {
+                    break;
+                }
+            } else if (waited < 0) {
+                if (waited != -EINTR) {
+                    detail::Logger::log(LogLevel::Error, "acceptor io_uring wait: %s",
+                                        std::strerror(-waited));
+                    break;
+                }
+            } else {
+                auto handle = [&](io_uring_cqe* done) {
+                    const auto token = io_uring_cqe_get_data64(done);
+                    const int res = done->res;
+                    const bool more = (done->flags & IORING_CQE_F_MORE) != 0;
+                    if (token == kWake) {
+                        wake.drain();
+                        if (!stop_flag.load(std::memory_order_acquire)) {
+                            arm_wake();
+                        }
+                    } else if (token == kSignal) {
+                        signalfd_siginfo info{};
+                        const ssize_t got = ::read(signal_fd.get(), &info, sizeof(info));
+                        if (got == static_cast<ssize_t>(sizeof(info))) {
+                            detail::Logger::log(LogLevel::Info, "signal %u, shutting down",
+                                                info.ssi_signo);
+                        }
+                        begin_shutdown();
+                    } else if (token == kPause) {
+                        pause_inflight = 0;
+                        if (!stop_flag.load(std::memory_order_acquire)) {
+                            paused = false;
+                            arm_accept();
+                        }
+                    } else if (token == kAccept) {
+                        if (res >= 0) {
+                            adopt_accepted(res);
+                            if (!more) {
+                                accept_inflight = 0;
+                                arm_accept();
+                            }
+                        } else {
+                            accept_inflight = 0;
+                            const int err = -res;
+                            if (use_multishot && (err == EINVAL || err == EOPNOTSUPP)) {
+                                use_multishot = false;
+                                accept_note =
+                                    std::string("multishot accept rejected: ") + std::strerror(err);
+                                arm_accept();
+                            } else if (err == EMFILE || err == ENFILE) {
+                                detail::Logger::log(LogLevel::Warn, "accept: %s",
+                                                    std::strerror(err));
+                                paused = true;
+                                arm_pause();
+                            } else if (err == ECONNABORTED || err == EINTR || err == EAGAIN) {
+                                arm_accept();
+                            } else if (err != ECANCELED && err != EBADF) {
+                                detail::Logger::log(LogLevel::Error, "io_uring accept: %s",
+                                                    std::strerror(err));
+                                arm_accept();
+                            }
+                        }
+                    }
+                    io_uring_cqe_seen(ring, done);
+                };
+                handle(cqe);
+                while (io_uring_peek_cqe(ring, &cqe) == 0) {
+                    handle(cqe);
+                }
+            }
+
+            if (stop_flag.load(std::memory_order_acquire)) {
+                if (!stop_since.has_value()) {
+                    stop_since = std::chrono::steady_clock::now();
+                }
+                if (accept_inflight > 0 && !cancel_posted) {
+                    if (io_uring_sqe* sqe = next_sqe()) {
+                        io_uring_prep_cancel64(sqe, kAccept, 0);
+                        io_uring_sqe_set_data64(sqe, kCancel);
+                        cancel_posted = true;
+                    }
+                }
+                if (accept_inflight == 0 && pause_inflight == 0) {
+                    break;
+                }
+                if (std::chrono::steady_clock::now() - *stop_since >
+                    config.shutdown_timeout + std::chrono::seconds(2)) {
+                    detail::Logger::log(
+                        LogLevel::Warn,
+                        "acceptor io_uring shutdown timed out with accept in flight");
+                    break;
+                }
+            }
+        }
+
+        io_uring_submit(ring);
+        __kernel_timespec drain_ts{};
+        drain_ts.tv_nsec = 50'000'000L;
+        for (int i = 0; i < 8; ++i) {
+            io_uring_cqe* late = nullptr;
+            if (io_uring_wait_cqe_timeout(ring, &late, &drain_ts) < 0) {
+                break;
+            }
+            if (late->res >= 0 && io_uring_cqe_get_data64(late) == kAccept) {
+                ::close(late->res);
+            }
+            io_uring_cqe_seen(ring, late);
+        }
+        return true;
+#endif
     }
 
     void acceptor_loop() {
@@ -310,6 +642,12 @@ struct Server::Impl {
     detail::Socket listen;
     detail::EventFd wake{true};
     detail::FileDescriptor signal_fd;
+    std::string accept_mode{"epoll"};
+    std::string accept_note;
+    std::string uring_probe;
+#ifdef FLUXNET_HAS_IO_URING
+    std::unique_ptr<io_uring> accept_ring;
+#endif
 };
 
 Server::Server(ServerConfig config) : impl_(std::make_unique<Impl>(std::move(config))) {}
@@ -415,6 +753,11 @@ void Server::run() {
                 throw std::runtime_error("worker failed during startup");
             }
         }
+        if (resolved == IoBackend::IoUring) {
+            impl_->prepare_uring_accept();
+        } else {
+            impl_->accept_mode = "epoll";
+        }
         if (impl_->config.cpu_affinity) {
             // Acceptor uses the last CPU in the cpuset when affinity is enabled.
             cpu_set_t allowed;
@@ -441,7 +784,11 @@ void Server::run() {
             impl_->cv.notify_all();
         }
         if (!impl_->stop_flag.load(std::memory_order_acquire)) {
-            impl_->acceptor_loop();
+            const bool uring_accept = impl_->accept_mode == "uring" && impl_->try_acceptor_uring();
+            if (!uring_accept && !impl_->stop_flag.load(std::memory_order_acquire)) {
+                impl_->accept_mode = "epoll";
+                impl_->acceptor_loop();
+            }
         }
     } catch (...) {
         impl_->begin_shutdown();
@@ -496,6 +843,15 @@ IoBackend Server::active_backend() const noexcept {
 }
 std::string Server::backend_note() const {
     return impl_->note;
+}
+std::string Server::accept_mode() const {
+    return impl_->accept_mode;
+}
+std::string Server::accept_note() const {
+    return impl_->accept_note;
+}
+std::string Server::uring_probe() const {
+    return impl_->uring_probe;
 }
 
 MetricsSnapshot Server::metrics() const {

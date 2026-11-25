@@ -2,6 +2,15 @@ add_executable(fluxnet_bench load_generator/main.cpp)
 target_link_libraries(fluxnet_bench PRIVATE fluxnet)
 target_include_directories(fluxnet_bench PRIVATE ${CMAKE_SOURCE_DIR}/src)
 
+if(FLUXNET_BUILD_TESTS)
+    add_executable(fluxnet_loadgen_test load_generator/loadgen_test.cpp)
+    target_link_libraries(fluxnet_loadgen_test PRIVATE fluxnet GTest::gtest_main)
+    add_test(NAME fluxnet_loadgen_test COMMAND fluxnet_loadgen_test)
+    set_tests_properties(fluxnet_loadgen_test PROPERTIES
+        LABELS integration
+        ENVIRONMENT "FLUXNET_BENCH=$<TARGET_FILE:fluxnet_bench>")
+endif()
+
 add_executable(fluxnet_blocking_echo baselines/blocking_echo.cpp)
 target_link_libraries(fluxnet_blocking_echo PRIVATE fluxnet)
 target_include_directories(fluxnet_blocking_echo PRIVATE ${CMAKE_SOURCE_DIR}/src)

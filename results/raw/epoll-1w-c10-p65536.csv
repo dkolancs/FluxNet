@@ -1,0 +1,2 @@
+offered,completed,failures,timed_out,connect_failures,rejected_sends,msgs_per_s,bytes_per_s,p50_ns,p95_ns,p99_ns,p999_ns,max_ns
+50969,41007,0,10,0,0,20503.5,1.34372e+09,442368,487424,532480,892928,6158677
