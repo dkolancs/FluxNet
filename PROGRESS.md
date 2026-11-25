@@ -1,20 +1,10 @@
 # Progress
 
-## Authorship — do not commit
+## Authorship
 
-```
-git config --get user.name   -> Cursor Agent
-git config --get user.email  -> cursoragent@cursor.com
-git shortlog -sne --all      -> 1  Cursor Agent <cursoragent@cursor.com>
-git log --all --format="%an <%ae> | %cn <%ce>"
-  Cursor Agent <cursoragent@cursor.com> | Cursor Agent <cursoragent@cursor.com>
-```
+Repo-local `user.name` is `Divith Reddy Kolan` and `user.email` is `dkolan@asu.edu`. New commits on `cursor/fluxnet-correctness-d096` use that identity and do not carry a Co-authored-by trailer. Nothing was pushed. The initial commit still has a historical Co-authored-by line and was not rewritten.
 
-The only commit message is `Initial commit` plus `Co-authored-by: dkolancs <dkolancs@users.noreply.github.com>`. That trailer was already in history. It was not added or rewritten by this session.
-
-The configured identity is an agent identity. **No commit was made. Nothing was pushed.** The library is untracked in the working tree (`git status` shows untracked files under `include/`, `src/`, `tests/`, and the docs).
-
-## What is implemented and verified
+## Feature status
 
 | Feature | Status |
 | --- | --- |
@@ -22,49 +12,51 @@ The configured identity is an agent identity. **No commit was made. Nothing was 
 | RAII `FileDescriptor`, TCP socket helpers | Implemented and verified |
 | 8-byte frame codec, incremental decode, in-process fuzz | Implemented and verified |
 | Epoll reactor, LT and ET, generation tokens, eventfd wake | Implemented and verified |
-| Acceptor + N workers, round-robin and least-loaded, admission cap | Implemented and verified (round-robin and the cap have tests; least-loaded is compiled and not separately measured) |
-| Mutex queue and lock-free SPSC handoff | Implemented and verified (unit, threaded checksum, uncontended microbench) |
-| Worker-local buffer pool and `sendmsg` gather | Implemented and verified (pool unit tests; gather is the default write path, no separate on/off benchmark) |
-| Watermarks, idle timeout, slow-consumer timeout, timerfd | Implemented and verified (idle test; slow-reader test checks a byte bound, not a timeout close) |
-| signalfd shutdown, lifecycle states | Implemented and verified by tests that `stop()` and join |
+| Acceptor + N workers, round-robin and least-loaded, admission cap | Implemented and verified (`Dispatch.LeastLoadedReturnsToIdleWorker` plus the existing cap test) |
+| Mutex queue and lock-free SPSC handoff | Implemented and verified |
+| Worker-local buffer pool and `sendmsg` gather | Implemented and verified. On/off runs are in `BENCHMARKS.md`. Neither single 2 second sample showed a benefit. Defaults unchanged |
+| Watermarks, idle timeout, slow-consumer timeout, timerfd | Implemented and verified |
+| Send admission before `Accepted` | Implemented and verified (`Admission.TrySendDoesNotAcceptPastCap`) |
+| signalfd shutdown, lifecycle states | Implemented and verified |
 | Public server/client, echo example | Implemented and verified |
-| io_uring worker recv/send, runtime fallback | Implemented and verified (echo integration did not skip; 10-conn bench ran) |
-| CPU affinity flag, default off | Implemented but partially verified (code honors `sched_getaffinity`; no before/after benchmark, flag was off) |
-| Pub/sub and KV examples | Implemented and verified (in-process tests) |
-| Load generator, JSON, histogram, compare/plot scripts | Implemented and verified for the runs in `BENCHMARKS.md` |
-| Blocking and thread-per-connection baselines | Implemented and verified (2 s runs) |
-| 45 s smoke soak | Implemented and verified as 45 s only |
-| Dockerfile, compose.yaml | Implemented but partially verified (files exist; `docker` is not installed, so they were not run) |
-| GitHub Actions workflow | Implemented but partially verified (the yaml matches the commands used here; Actions did not run in this session) |
-| CrashLab experiments | Not implemented. Blocked by environment: no CrashLab repo. See `crashlab/INTEGRATION.md` |
-| Boost.Asio baseline | Not implemented. Boost headers were not installed |
-| libFuzzer, Valgrind, perf counters, flame graph | Blocked by environment |
-| 10 minute, 1 hour, 24 hour soaks | Not implemented as executed runs. `scripts/soak.sh` takes `DURATION`. Only 45 s was executed |
-| 10k connections, 1M msgs/s | Not reached. Highest measured short-run throughput is 373133 msgs/s; 45 s run was 419925 msgs/s |
+| io_uring worker recv/send/cancel, runtime fallback | Implemented and verified (`Echo.IoUringIfAvailable` did not skip; 10-conn bench ran). Async accept is not implemented; the acceptor stays on epoll |
+| CPU affinity flag, default off | Implemented and verified as "no benefit on one 10-connection run". Flag stays off. No perf counters |
+| Pub/sub and KV examples | Implemented and verified. Disconnect removes the subscription. TSan passed |
+| Load generator, merged histogram, JSON | Implemented and verified. Old unmerged files are in `results/legacy-unmerged/` |
+| Blocking and thread-per-connection baselines | Implemented and verified (2 s runs after the histogram fix) |
+| Boost.Asio baseline | Implemented and verified as an external binary. One 10-connection run. Not linked into libfluxnet |
+| 10000 idle connections | Implemented and verified. `connected=10000 failed=0`, RSS 177052 kB. Not an active-message test |
+| 600 second soak | Implemented and verified. Wall clock of the script 601 s. `duration_s` 600. Not 1 hour or 24 hours |
+| 1 hour and 24 hour soaks | Not run. `scripts/soak.sh` accepts `DURATION` |
+| Dockerfile, compose.yaml | Implemented but partially verified (files exist; `docker` is not installed) |
+| GitHub Actions workflow | Implemented but partially verified (yaml matches the commands; Actions did not run here) |
+| CrashLab | Blocked by environment. No CrashLab repo. `crashlab/INTEGRATION.md` is only a boundary |
+| libFuzzer, Valgrind, perf counters | Blocked by environment |
+| 1M small messages/s | Not reached. Highest FluxNet figure in `results/raw/` is 401951 msgs/s over 600 seconds |
 
 ## Commands that passed
 
-Debug (`/workspace/build`, g++ 13.3.0):
+Debug (`/workspace/build`, g++ 13.3.0), 38 GoogleTest cases, 9 ctest binaries:
 
 ```bash
 ctest --test-dir build --output-on-failure
-# 9/9 passed, integration 16.49 s
-# 33 gtest cases: fd 2, socket 4, codec 5, queue 3, pool 3, histogram 2,
-# integration 10, concurrency 2, fuzz 2
+# 9/9, integration about 14.6 s
 ```
 
-ASan `build-asan`: 9/9. UBSan `build-ubsan`: 9/9. TSan `build-tsan`: 9/9 after the broker lifetime fix in `tests/integration/test_apps.cpp`.
+ASan `build-asan`: 9/9. UBSan `build-ubsan`: 9/9. TSan `build-tsan`: 9/9. Benchmarks were off in the sanitizer configures. No suppressions were added.
 
-Release benchmarks: `DURATION=2 WARMUP=0.5 bash scripts/benchmark.sh` plus the 1000-connection sample, one repeat, the queue microbench, and `DURATION=45 bash scripts/soak.sh`. Numbers are only in `BENCHMARKS.md` and `results/raw/`.
+Release:
 
-After `clang-format`, debug `fluxnet_integration` was rebuilt and passed 10/10. Sanitizer ctests were not re-run after formatting.
+```bash
+cmake -S . -B build-release -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_COMPILER=/usr/bin/g++ -DFLUXNET_ENABLE_ASIO_BASELINE=ON
+DURATION=2 WARMUP=0.5 bash scripts/benchmark.sh
+DURATION=600 PORT=19220 bash scripts/soak.sh
+CONNECTIONS=10000 bash scripts/scale_connections.sh
+python3 scripts/plot_results.py
+```
 
-## Defects fixed
+Numbers are only in `BENCHMARKS.md` and `results/raw/`. The chart is `results/plots/throughput.png`.
 
-See `AUDIT.md`. The two that hung or raced startup were the condition-variable notify and `wait_until_running` treating the initial `Stopped` as done.
+## Defects fixed in this pass
 
-## Next step if another session resumes
-
-The git identity is still the blocker for commits. After a personal identity is configured (do not invent one, do not set it from this file), the first commit can be the tree that passed the commands above. Do not amend `5e0a6aa`.
-
-Useful follow-ups that are not done: a merged histogram in the load generator, an on/off pool benchmark, least-loaded as its own test, a 10-minute soak if you actually have the time, and a real CrashLab schema if the repo shows up.
+`try_send` no longer returns `Accepted` for a frame that is not queued. Histograms are merged before percentiles. `Connection::id()` works during `on_disconnect`. See `AUDIT.md`.

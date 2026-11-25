@@ -10,7 +10,9 @@ The generator stamps `std::chrono::steady_clock` immediately before a successful
 
 `fluxnet::detail::LogHistogram` is a log2 histogram: `power = floor(log2(v))`, and 64 linear sub-buckets cover `[2^power, 2^(power+1))`. `percentile()` returns the **upper edge** of the bucket that crosses the percentile, so it does not under-report. Empty histograms report 0. This is not HdrHistogram.
 
-When the generator uses more than one thread, the reported percentile is the **maximum of the per-thread percentiles**, not a merged histogram. Throughput is the sum. The 4-worker and 1000-connection runs used 2 generator threads, so their percentiles are that maximum.
+When the generator uses more than one thread, each thread keeps its own histogram. Before p50, p95, p99, p99.9, and max are reported, `LogHistogram::merge` adds the bucket counts. The reported percentile is the percentile of the merged buckets. It is **not** the maximum of the per-thread percentiles. Throughput is the sum of completed messages. `Histogram.MergeIsNotMaxOfPercentiles` checks that those two methods disagree on a known pair of distributions.
+
+Files under `results/legacy-unmerged/` were produced before that merge. Their percentiles are the max of the per-thread percentiles when the generator used more than one thread. They are not current results and they are not plotted.
 
 ### Closed loop
 
@@ -18,65 +20,89 @@ Every run below is closed loop with `--outstanding 1`. Open loop (`--rate`) is i
 
 ### What the JSON hash means
 
-`fluxnet_bench` runs `git rev-parse --short HEAD`. That printed `5e0a6aa`. That commit is the initial README only. The library sources were uncommitted because the configured git identity is `Cursor Agent` and this session did not commit. The numbers belong to the working tree that produced the binaries in `build-release`, not to the tree of `5e0a6aa`.
+`fluxnet_bench` runs `git rev-parse --short HEAD`. These files say `ecc7a98`. That commit is the Asio baseline and the admission fix's parent on this branch. The binaries are the Release build of that commit. Later documentation edits do not change the measured binaries.
 
 ### How to reproduce
 
 ```bash
-cmake -S . -B build-release -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_COMPILER=/usr/bin/g++
+cmake -S . -B build-release -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_COMPILER=/usr/bin/g++ -DFLUXNET_ENABLE_ASIO_BASELINE=ON
 cmake --build build-release -j
 DURATION=2 WARMUP=0.5 bash scripts/benchmark.sh
 ```
 
-Compiler: g++ 13.3.0, `-O3 -DNDEBUG` via `CMAKE_BUILD_TYPE=Release`. liburing 2.5. CPU string from `/proc/cpuinfo`: `Intel(R) Xeon(R) Processor`.
+Compiler: g++ 13.3.0, `-O3 -DNDEBUG` via `CMAKE_BUILD_TYPE=Release`. liburing 2.5. CPU string from `/proc/cpuinfo`: `Intel(R) Xeon(R) Processor`. Boost 1.83.0 from the distro `libboost-dev` package, used only by `fluxnet_asio_echo`.
+
+One run each unless a file name says otherwise. No confidence interval was computed. The older two-run epoll spread (about 4%) is in `results/legacy-unmerged/` and used the old percentile method, so it is not a confidence interval for this table.
 
 ## Results
 
-Single runs except where a second file is named. No confidence interval was computed.
+| File | Server | conns | payload | workers / notes | msgs/s | p50 ns | p95 ns | p99 ns | p99.9 ns | max ns |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| `epoll-1w-c1-p64.json` | epoll LT | 1 | 64 | 1 worker, 1 client thread | 79723 | 12288 | 13440 | 14976 | 23552 | 815396 |
+| `blocking-c1-p64.json` | blocking, one conn at a time | 1 | 64 | 1 thread | 84672 | 11648 | 12672 | 13824 | 20992 | 216795 |
+| `epoll-1w-c10-p64.json` | epoll LT, pool on, gather on | 10 | 64 | 1 worker | 207144 | 37888 | 75776 | 79872 | 99328 | 2564756 |
+| `epoll-1w-c10-p64-nopool.json` | same, `--no-pool` | 10 | 64 | 1 worker | 205229 | 38400 | 77824 | 81920 | 104448 | 949652 |
+| `epoll-1w-c10-p64-nogather.json` | same, `--no-gather` | 10 | 64 | 1 worker | 203398 | 38912 | 77824 | 81920 | 99328 | 1398196 |
+| `epoll-1w-c10-p64-affinity.json` | same, `--affinity` | 10 | 64 | 1 worker | 208064 | 38400 | 76800 | 80896 | 97280 | 291293 |
+| `epoll-et-1w-c10-p64.json` | epoll ET | 10 | 64 | 1 worker | 204479 | 47104 | 52736 | 57856 | 101376 | 206637 |
+| `uring-1w-c10-p64.json` | io_uring workers, epoll acceptor | 10 | 64 | 1 worker | 221519 | 42496 | 52224 | 57344 | 76800 | 211377 |
+| `threadpc-c10-p64.json` | thread per connection | 10 | 64 | one thread each | 198230 | 35840 | 65536 | 76800 | 892928 | 5816185 |
+| `asio-c10-p64.json` | Boost.Asio 1.83, one `io_context` | 10 | 64 | not libfluxnet | 237147 | 38912 | 47616 | 50176 | 59392 | 168199 |
+| `epoll-1w-c100-p64.json` | epoll LT | 100 | 64 | 1 worker, 2 client threads | 210717 | 471040 | 495616 | 557056 | 1245184 | 1638250 |
+| `epoll-4w-c100-p64.json` | epoll LT | 100 | 64 | 4 workers, 2 client threads | 369486 | 149504 | 434176 | 4128768 | 6094848 | 15681901 |
+| `epoll-4w-c10-p1024.json` | epoll LT | 10 | 1024 | 4 workers, 1 client thread | 185252 | 37888 | 71680 | 77824 | 101376 | 6306522 |
+| `epoll-1w-c1000-p64.json` | epoll LT | 1000 | 64 | 1 worker, 2 client threads | 188600 | 5177344 | 6094848 | 6619136 | 6881280 | 6997247 |
 
-| File | Server | conns | payload | workers / notes | msgs/s | p50 ns | p99 ns | p99.9 ns |
-| --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| `epoll-1w-c1-p64.json` | epoll LT | 1 | 64 | 1 worker | 80518.5 | 12288 | 13440 | 19456 |
-| `blocking-c1-p64.json` | blocking, one conn at a time | 1 | 64 | 1 thread | 84762 | 11392 | 14464 | 23040 |
-| `epoll-1w-c10-p64.json` | epoll LT | 10 | 64 | 1 worker | 209076 | 39424 | 77824 | 99328 |
-| `epoll-1w-c10-p64-repeat.json` | same | 10 | 64 | 1 worker | 217212 | 49664 | 68608 | (see file) |
-| `epoll-et-1w-c10-p64.json` | epoll ET | 10 | 64 | 1 worker | 216320 | 43520 | 54272 | 80896 |
-| `uring-1w-c10-p64.json` | io_uring workers, epoll acceptor | 10 | 64 | 1 worker | 223502 | 40448 | 56832 | 72704 |
-| `threadpc-c10-p64.json` | thread per connection | 10 | 64 | one thread each | 206660 | 35328 | 72704 | 86016 |
-| `epoll-1w-c100-p64.json` | epoll LT | 100 | 64 | 1 worker, 2 client threads | 214322 | 462848 | 614400 | 835584 |
-| `epoll-4w-c100-p64.json` | epoll LT | 100 | 64 | 4 workers, 2 client threads | 373133 | 130048 | 4128768 | 6750208 |
-| `epoll-4w-c10-p1024.json` | epoll LT | 10 | 1024 | 4 workers | 180128 | 39424 | 89088 | 141312 |
-| `epoll-1w-c1000-p64.json` | epoll LT | 1000 | 64 | 1 worker, 2 client threads | 212232 | 4653056 | 5832704 | (see file) |
-| `soak-45s.json` | epoll LT | 32 | 64 | 2 workers, 45 s, 2 client threads | 419925 | 58368 | 126976 | 167936 |
+The 100-connection and 1000-connection rows use 2 generator threads. Their percentiles are merged bucket counts.
 
-`soak-45s.json` completed 18896614 messages, 0 failures, 1209383296 payload bytes. It is a 45 second smoke soak. It is not a 10 minute, 1 hour, or 24 hour run.
+### One variable at a time
 
-### RSS
+Against `epoll-1w-c10-p64` (207144 msgs/s, p99 79872 ns):
 
-After the 1000-connection run, while `fluxnet_echo` (1 worker) was still up, `/proc/<pid>/status` showed `VmRSS` 21152 kB, `VmHWM` 21152 kB, `Threads` 2. `ps` showed about 96.4% CPU. That is one measurement, not a profile.
+- Pool off: 205229 msgs/s, p99 81920 ns. No benefit for the pool on this 64-byte sample. The pool stays; it is the bounded freelist, and one run is not a reason to delete it.
+- Gather off: 203398 msgs/s, p99 81920 ns. A 64-byte echo is one chunk, so `sendmsg` with one iovec is not doing extra gathering. No benefit showed up. Gather stays on because multi-chunk output still uses it.
+- Affinity on: 208064 msgs/s, p99 80896 ns. No benefit. The flag stays off. `perf` is not installed and `perf_event_paranoid` is 2, so this is not a counter-based comparison.
+
+### Idle connections
+
+`results/raw/scale-10000.txt` is a separate run, not a throughput test. `fluxnet_echo` with 1 worker, epoll, default `max_connections` 10000, held 10000 idle connections (`connected=10000 failed=0`). No `EMFILE` or `ENFILE` line was in the server log. While they were held, `/proc/<echo-pid>/status` showed `VmRSS` 177052 kB, `VmHWM` 177052 kB, `Threads` 2. The client sockets were in `fluxnet_hold`, not in that RSS. This is not 10000 actively messaging connections. The active case in this table stops at 1000 connections.
 
 ### Queue microbenchmark
 
-`fluxnet_queue_bench` (Google Benchmark 1.8.3), single thread, uncontended push then pop:
+`results/raw/queue-bench.json`, Google Benchmark 1.8.3, single thread, uncontended push then pop, `--benchmark_min_time=0.2s`:
 
 | name | time |
 | --- | --- |
-| `spsc_ping` | 1.12 ns |
-| `mutex_ping` | 8.69 ns |
+| `spsc_ping` | 1.17 ns |
+| `mutex_ping` | 8.72 ns |
 
-This does not mean the server is 8x faster with the SPSC. The server was not in this process. The SPSC is only the accept handoff.
+This does not mean the server is faster with the SPSC. The server was not in this process. The SPSC is only the accept handoff.
 
 ### What these runs do not show
 
-- 10k connections were not attempted.
-- 1M small messages/s was not reached. The highest short run was 373133 msgs/s (4 workers, 100 connections) and the 45 second run was 419925 msgs/s (2 workers, 32 connections).
-- Sub-100 µs p99 held for 1 connection and for the 10-connection epoll/io_uring/thread-per-connection runs. It did not hold for 100 connections on 1 worker (614 µs) or 1000 connections (5.83 ms). The 4-worker 100-connection p99 was 4.13 ms; that process used more threads than the 4 vCPUs.
-- On one connection, the blocking server was faster than epoll (84762 vs 80518 msgs/s). The reactor's overhead is visible when there is nothing to multiplex.
-- io_uring beat 1-worker epoll by about 7% on the 10-connection case (223502 vs 209076). One run each. The acceptor was still epoll.
-- Edge trigger was slightly ahead of level trigger on that same shape (216320 vs 209076) and its p99 was lower (54 µs vs 78 µs). One run each.
-- The second 10-connection epoll run was 217212 vs 209076, about 4% higher. Treat the 2 second numbers as single samples.
-- No Boost.Asio binary was built.
-- `perf` is not installed. `scripts/profile.sh` printed `perf is not installed. No counters collected.`
-- Open-loop, churn, and slow-consumer benchmark modes exist in the generator and were not part of this matrix. The slow-consumer *test* is in `tests/integration/test_limits.cpp` and does not publish a throughput number.
+- 1M small messages/s was not reached. The highest FluxNet short run was 369486 msgs/s (4 workers, 100 connections, 64 bytes). The Asio 10-connection run was 237147 msgs/s, which is higher than 1-worker epoll on that shape and lower than the 4-worker FluxNet run.
+- Sub-100 µs p99 held for 1 connection and for the 10-connection epoll, io_uring, thread-per-connection, and Asio runs. It did not hold for 100 connections on 1 worker (557 µs), 1000 connections (6.62 ms), or 4 workers and 100 connections (4.13 ms merged). The 4-worker process used more threads than the 4 vCPUs.
+- On one connection, the blocking server was faster than epoll (84672 vs 79723 msgs/s).
+- io_uring beat 1-worker epoll on the 10-connection case (221519 vs 207144). One run each. The acceptor was still epoll. Worker recv and send were io_uring.
+- Asio was faster than 1-worker epoll on that same 10-connection shape (237147 vs 207144) with a lower p99 (50.2 µs vs 79.9 µs). One run. Asio used one `io_context` thread. It is not linked into `libfluxnet`.
+- Open-loop, churn, and slow-consumer benchmark modes exist in the generator and were not part of this matrix.
+- `perf` is not installed. No hardware counters were collected.
+- The 600 second measurement is in the soak section. A 1-hour or 24-hour soak was not started.
 
-`python3 scripts/plot_results.py` wrote `results/plots/throughput.png` from the JSON files present at that time. The 1000-connection file and the repeat were added around the same period; re-run the script after adding files if the chart should include them.
+### Soak
+
+`scripts/soak.sh` with `DURATION=600` wrote `results/raw/soak-600s.json`. The shell timestamps around that script were `2026-11-25T01:09:21Z` to `2026-11-25T01:19:22Z` (601 seconds of wall clock, including server startup and the generator's 1 second warmup). The JSON `duration_s` is 600. That is the measurement window. It is not a 1-hour or 24-hour soak. Those were not started.
+
+| | |
+| --- | --- |
+| server | epoll LT, 2 workers |
+| connections | 32 |
+| payload | 64 |
+| generator threads | 2 (percentiles are merged) |
+| completed | 241170485 |
+| failures | 0 |
+| msgs/s | 401951 |
+| p50 / p95 / p99 / p99.9 / max ns | 62464 / 128000 / 139264 / 188416 / 20179720 |
+| payload bytes | 15434911040 |
+
+`results/legacy-unmerged/soak-45s.json` is a 45 second run from before the histogram merge. It is not this soak.

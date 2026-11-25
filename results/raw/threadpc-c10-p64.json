@@ -1,5 +1,5 @@
 {
-  "git": "5e0a6aa",
+  "git": "ecc7a98",
   "cpu": "Intel(R) Xeon(R) Processor",
   "cores": 4,
   "os": "Linux",
@@ -14,16 +14,16 @@
   "warmup_s": 0.5,
   "duration_s": 2,
   "seed": 1,
-  "completed": 413319,
+  "completed": 396461,
   "failures": 0,
-  "bytes": 26452416,
+  "bytes": 25373504,
   "behind_schedule": 0,
-  "msgs_per_s": 206660,
-  "bytes_per_s": 1.32262e+07,
-  "p50_ns": 35328,
+  "msgs_per_s": 198230,
+  "bytes_per_s": 1.26868e+07,
+  "p50_ns": 35840,
   "p95_ns": 65536,
-  "p99_ns": 72704,
-  "p999_ns": 86016,
-  "max_ns": 4775244,
-  "histogram": "log2 x 64 sub-buckets, percentile is the bucket upper bound; multi-thread percentiles are the max across threads"
+  "p99_ns": 76800,
+  "p999_ns": 892928,
+  "max_ns": 5816185,
+  "histogram": "log2 x 64 sub-buckets, percentile is the bucket upper bound; multi-thread percentiles are merged bucket counts"
 }

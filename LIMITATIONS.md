@@ -18,7 +18,7 @@ Facts below were read on this machine during this session. They are not a generi
 - `docker` is not installed. Dockerfile and compose.yaml are unchecked on this machine.
 - `tc`, `stress`, and `stress-ng` are not installed. No netem fault injection was run.
 - CrashLab: searched `/workspace`, `/home`, `/opt`, `/usr/local` for `*crashlab*` and found nothing. There is no CrashLab CLI or schema in this environment. `crashlab/INTEGRATION.md` is only a boundary note. No CrashLab experiment was run.
-- Git identity: `Cursor Agent` / `cursoragent@cursor.com`. Commits are blocked by the authorship rule. Nothing was pushed. The existing root commit message contains a `Co-authored-by` trailer; this session did not rewrite it.
+- Git identity for new commits: `Divith Reddy Kolan <dkolan@asu.edu>`, repo-local config only. Nothing was pushed. The initial commit still contains a historical `Co-authored-by` trailer. It was not rewritten. A local commit-msg hook tries to append `Co-authored-by: dkolancs <dkolancs@users.noreply.github.com>`; commits in this pass were created with that hook disabled so the trailer is not on the new commits.
 
 ## Toolchain (after installing missing packages)
 
@@ -28,7 +28,7 @@ Already present:
 - clang++ 18.1.3
 - cmake 3.28.3
 - Python 3.12.3
-- No system GoogleTest, Google Benchmark, or Boost.Asio headers at inspection time.
+- No system GoogleTest or Google Benchmark. Boost headers were not present at the first inspection; `libboost-dev` 1.83 was installed later for the Asio baseline only.
 
 Installed with apt during this session because they were missing:
 
@@ -36,6 +36,7 @@ Installed with apt during this session because they were missing:
 - liburing 2.5 (`liburing-dev`)
 - clang-format 18.1.3
 - python3-matplotlib 3.6.3
+- libboost-dev 1.83.0 (Asio baseline only; not linked into libfluxnet)
 
 io_uring:
 
@@ -45,7 +46,7 @@ io_uring:
 
 GoogleTest v1.14.0 and Google Benchmark v1.8.3 are fetched by CMake (`GIT_TAG`), not vendored. Configuring the build needs network access to GitHub.
 
-Boost.Asio is not installed. The comparison target is Not implemented. The CMake option exists and defaults OFF.
+Boost 1.83 headers were installed from `libboost-dev`. `fluxnet_asio_echo` is a separate executable built with `-DFLUXNET_ENABLE_ASIO_BASELINE=ON`. `libfluxnet` does not link Boost. The 10-connection Asio numbers are in `results/raw/asio-c10-p64.json`.
 
 libFuzzer was not used. Protocol fuzzing is a deterministic in-process driver.
 
@@ -64,8 +65,12 @@ libFuzzer was not used. Protocol fuzzing is a deterministic in-process driver.
 - No HTTP, TLS, or UDP.
 - Pub/sub and KV are in-memory examples. They are not durable.
 - Loopback benchmarks include client and server on the same 4 vCPU guest. They are not NIC numbers.
-- Soak: only durations recorded in BENCHMARKS.md and PROGRESS.md were executed.
+- Soak: `DURATION=600` finished (`results/raw/soak-600s.json`, wall clock 601 seconds for the script). A 1-hour or 24-hour soak was not started. The 45 second file in `results/legacy-unmerged/` is an older run and used unmerged percentiles.
 
-## Authorship blocker
+## Idle connections
 
-Do not commit while `user.name` is `Cursor Agent`. Files stay in the working tree. A later session with a personal identity can commit the verified tree without rewriting the initial commit.
+`scripts/scale_connections.sh` held 10000 idle connections to a 1-worker echo server. `connected=10000 failed=0`. Server RSS was 177052 kB, `Threads` 2. No EMFILE was logged. Those sockets were not sending. The active-message runs are the benchmark JSON files, and the largest of those is 1000 connections.
+
+## Authorship
+
+New commits use `Divith Reddy Kolan <dkolan@asu.edu>`. Do not push unless the user asks. Do not rewrite the initial commit.

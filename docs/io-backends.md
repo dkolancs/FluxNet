@@ -22,9 +22,9 @@ Each worker has its own ring (256 entries, halved twice if init fails). Per conn
 
 Cancel uses `io_uring_prep_cancel64` on the op's user data. The connection is destroyed only when recv, send, and cancel completions have all been seen, or after `io_uring_queue_exit` if the drain times out (2 s). Buffers are members of the connection, so they outlive the CQEs that reference them.
 
-The acceptor does not use the ring. It is epoll plus `accept4`. That is why an "io_uring" benchmark still has an epoll thread.
+The acceptor does not use the ring. It is level-triggered epoll plus `accept4`. Accept was left there on purpose: `EMFILE`/`ENFILE` drops listen interest for 50 ms, which is a level-triggered epoll behavior, and that path was not reimplemented as an io_uring accept. An "io_uring" benchmark still has an epoll acceptor thread. Worker operations that were run are recv, send (including a short result, which is consumed and resubmitted), poll for connect/wake/timer, and cancel. Fixed buffers, registered files, multishot recv, and zero-copy send were not implemented and were not benchmarked.
 
-On this guest, `io_uring_queue_init(8)` in a probe returned features `0xffff`, and the echo integration test selected io_uring rather than skipping. The 10-connection benchmark is in `results/raw/uring-1w-c10-p64.json`.
+On this guest, `Echo.IoUringIfAvailable` selected `IoUring` and required an empty `backend_note()`. The 10-connection benchmark is `results/raw/uring-1w-c10-p64.json`.
 
 ## What was not built
 

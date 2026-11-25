@@ -4,7 +4,7 @@
 
 Each class keeps at most `pool_max_per_class` free blocks (default 256). Release past the cap deletes the block. Blocks sitting on the freelist are intentional. ASan will not call them leaks if they are still reachable from the pool, and the pool deletes them in its destructor.
 
-`PooledBuffer` is move-only. Destruction returns the memory. Output frames live in a `deque` of these buffers until `sendmsg` or the io_uring CQE consumes them.
+`PooledBuffer` is move-only. Destruction returns the memory. A cross-thread send first copies the encoded frame into a `std::vector` on the slot queue. The owner then copies that into a pooled buffer. Output frames live in a `deque` of those buffers until `sendmsg` or the io_uring CQE consumes them. The pool is not on the cross-thread path, because it is not thread-safe.
 
 The recv scratch is a 16 KiB `vector` on the connection. The decoder copies a frame into its own vector so the scratch can be reused. That is a copy, not zero-copy.
 

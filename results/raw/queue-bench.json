@@ -1,0 +1,68 @@
+{
+  "context": {
+    "date": "2026-11-25T01:08:38+00:00",
+    "host_name": "cursor",
+    "executable": "/workspace/build-release/benchmarks/fluxnet_queue_bench",
+    "num_cpus": 4,
+    "mhz_per_cpu": 2700,
+    "cpu_scaling_enabled": false,
+    "caches": [
+      {
+        "type": "Data",
+        "level": 1,
+        "size": 49152,
+        "num_sharing": 1
+      },
+      {
+        "type": "Instruction",
+        "level": 1,
+        "size": 65536,
+        "num_sharing": 1
+      },
+      {
+        "type": "Unified",
+        "level": 2,
+        "size": 2097152,
+        "num_sharing": 1
+      },
+      {
+        "type": "Unified",
+        "level": 3,
+        "size": 503316480,
+        "num_sharing": 4
+      }
+    ],
+    "load_avg": [0.885254,0.549316,0.265137],
+    "library_build_type": "release"
+  },
+  "benchmarks": [
+    {
+      "name": "spsc_ping",
+      "family_index": 0,
+      "per_family_instance_index": 0,
+      "run_name": "spsc_ping",
+      "run_type": "iteration",
+      "repetitions": 1,
+      "repetition_index": 0,
+      "threads": 1,
+      "iterations": 237208872,
+      "real_time": 1.1672640304984327e+00,
+      "cpu_time": 1.1671635241366520e+00,
+      "time_unit": "ns"
+    },
+    {
+      "name": "mutex_ping",
+      "family_index": 1,
+      "per_family_instance_index": 0,
+      "run_name": "mutex_ping",
+      "run_type": "iteration",
+      "repetitions": 1,
+      "repetition_index": 0,
+      "threads": 1,
+      "iterations": 32089483,
+      "real_time": 8.7179448481231514e+00,
+      "cpu_time": 8.7176070739438227e+00,
+      "time_unit": "ns"
+    }
+  ]
+}

@@ -53,9 +53,9 @@ See DESIGN.md. Short version: the worker that accepts a connection (after handof
 
 ## Git authorship
 
-- Read the configured `user.name` and `user.email` before committing. Do not set git config.
-- The identity on this machine at the time of writing is `Cursor Agent <cursoragent@cursor.com>`. That is an agent identity. Do not commit or push while it remains. See PROGRESS.md.
-- No Co-authored-by trailers. No history rewrite. No push unless the user explicitly authorizes it. This task does not.
+- Read the configured `user.name` and `user.email` before committing.
+- The repo-local identity for this tree is `Divith Reddy Kolan <dkolan@asu.edu>`. Do not commit as Cursor, Claude, or another agent. Do not add Co-authored-by or Generated-by trailers. A machine hook may try to add one; do not leave it on the commit.
+- Do not rewrite the initial commit. Do not push unless the user explicitly authorizes it.
 
 ## Definition of done
 

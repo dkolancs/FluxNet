@@ -1,78 +1,92 @@
 # Audit
 
-Review of the tree as built in this session. Severity is about correctness of the library, not about missing features.
+Review of the tree after the admission fix, the merged histogram, and the sanitizer rerun. Severity is about correctness of the library, not about missing features.
 
-This is not a release recommendation. The library is a bounded reactor with tests and a few measured runs. It is not production-ready.
+This is not a release recommendation. The library is a bounded reactor with tests and measured runs. It is not production-ready. No confirmed critical correctness bug is still open in the paths below. That is not a proof that none exist.
 
-## Fixed in this session
+## Fixed before this pass
 
 ### High — condition-variable lost wakeup on `stop()`
 
-`Client::run` waits on a condition variable until `stop_flag` is set. `stop()` used to store the flag and call `notify_all` without holding the same mutex the waiter uses. A notify that lands after the predicate check and before the sleep is lost, and `run()` never returns. The echo test hung in `~RunningClient` until it was killed.
-
-The same pattern existed on the server. Both now set the flag and notify while `mu` is held.
-
-Regression: `Echo.RoundTripLevelAndEdge` returns (about 4 s for level and edge) instead of hanging. ASan, UBSan, and TSan integration runs also returned.
+`Client::run` and `Server::run` wait on a condition variable. `stop()` used to store the flag and notify without holding the same mutex. A notify between the predicate check and the sleep was lost. Both now set the flag and notify while `mu` is held. `Echo.RoundTripLevelAndEdge` returns.
 
 ### High — `wait_until_running` treated the initial `Stopped` as completion
 
-The predicate included `Stopped`. Before `run()` stored `Starting`, a caller could observe the initial state and return immediately. A following `stop()` then set a flag that `run()` cleared, and the acceptor loop ran with nobody waiting to stop it.
+`startup_settled` stays false until this `run()` reaches `Running` or fails back to `Stopped`.
 
-`startup_settled` is false until this `run()` reaches `Running` or fails back to `Stopped`. The smoke program that printed `wait ok=0 state=stopped` before `run enter` was that race.
+## Fixed in this pass
 
-### Medium — pub/sub test destroyed the broker while workers ran
+### High — `try_send` / `send` could return `Accepted` and then drop the frame
 
-TSan reported a data race: the main thread destroyed `Broker`'s maps while a worker was in `on_disconnect`. The maps are mutex-protected during callbacks. The destructor does not take that mutex, and it should not have to if the server has already joined. The test now `stop()`s and `join()`s the server before the broker is destroyed.
+`Worker::send_external` queued a task and returned `Accepted` before the owner looked at the output cap. The task later called `enqueue`, which returned `Backpressured` and did not send. The caller had already been told the frame was accepted. The blocking `send` path had a related lie: a timeout returned `Backpressured` while the task could still queue the frame.
 
-After that change, `ctest` in `build-tsan` passed 9/9. The race was in the example's lifetime, not in the SPSC or the reactor's connection ownership. It is still a real footgun: an application must not destroy objects captured by callbacks until `run()` has returned.
+Admission is now `Worker::admit`. The frame is encoded into a `std::vector` and pushed onto a per-slot queue under that slot's mutex, or it is not pushed. `Accepted` means it was pushed. `Backpressured` means it was not. The owner thread is the only thread that copies the bytes into the buffer pool and writes the socket. A close may discard bytes that were already accepted; that close is the hard outcome.
 
-## Reviewed, not a defect
+Regression: `Admission.TrySendDoesNotAcceptPastCap`. The owner blocks inside `on_connect`. Sixteen `try_send` calls of 16-byte frames against `max_pending_output` 64 return exactly 4 `Accepted` and 12 `Backpressured`. `messages_out` matches the accepted count before the owner is released. The peer then reads 64 bytes.
 
-- `FileDescriptor` closes once and does not retry `close` after `EINTR`. On Linux the descriptor is released anyway. Documented in `DESIGN.md`. A unit test checks that a moved-from wrapper does not close the same number again.
-- Epoll user data is `(index << 32) | generation`. Lookup ignores a stale generation. Slots are not recycled until generation bumps.
-- SPSC indices use acquire/release, are on separate cache lines (`alignas(64)`), and `static_assert` that `atomic<size_t>::is_always_lock_free`. The queue is single-producer. Cross-thread sends use `MutexQueue`.
-- Wake order is push, then `eventfd` write. The worker drains the queue at the start of the loop and again after the eventfd read.
-- Frame length is checked against `max_frame_size` before `vector::resize`. A unit test feeds `0xffffffff` and expects `FrameTooLarge` without a huge allocation.
-- io_uring recv and send buffers stay on the connection until the CQE. `io_uring_queue_exit` runs after a drain attempt. Leftover connections are only freed after the ring is gone.
-- Output is rejected when `out_bytes` is already at the high watermark or the new frame would pass `max_pending_output`. Reads are paused at the high watermark and resumed at or below the low watermark, with an explicit deferred read so edge trigger does not wait for an edge that will not fire.
-- Callback exceptions are caught in `feed` and `invoke_connect`. The connection is closed. The process stays up. `Echo.CallbackExceptionDoesNotKillServer` checks `state() == Running` and `callback_exceptions >= 1`.
+Files: `src/core/worker.cpp`, `include/fluxnet/server.hpp`, `DESIGN.md`, `tests/integration/test_admission.cpp`.
+
+### Medium — multi-thread percentiles were the max of per-thread percentiles
+
+`fluxnet_bench` now calls `LogHistogram::merge` before p50/p95/p99/p99.9/max. `Histogram.MergeIsNotMaxOfPercentiles` uses 100 samples of 1000 and 100 samples of 100000. The merged p50 is below the max of the two p50s. Old JSON was moved to `results/legacy-unmerged/` and is not plotted. New files say the histogram method is merged bucket counts. The `git` field on those files is `ecc7a98`.
+
+### Medium — `on_disconnect` could not see the connection id
+
+`Connection::id()` returned empty when `destroyed` was set, and `destroy_conn` sets that flag before the callback. Pub/sub looked up an empty id and left the topic in the map. The id is now returned for the whole callback. The outbound slot generation is cleared first, so `try_send` during `on_disconnect` returns `Closed` and does not queue. `PubSub.DisconnectRemovesSubscription` expects `topics() == 0` after disconnect. TSan passed that test.
+
+The broker still must not be destroyed while a worker is inside the callback. The test joins before the broker dies. That application rule is unchanged.
+
+### Low — least-loaded dispatch had no test that diverged from round-robin
+
+`Dispatch.LeastLoadedReturnsToIdleWorker` connects, closes, and connects again. Both loads are zero, so the scan keeps worker 0. Round-robin would have advanced. The test expects both connections on the same worker.
+
+## Reviewed, not a new defect
+
+- `FileDescriptor` closes once and does not retry `close` after `EINTR`.
+- Epoll user data is `(index << 32) | generation`. Lookup ignores a stale generation.
+- SPSC indices use acquire/release and are on separate cache lines. The queue is single-producer. Cross-thread sends use the slot mutex, not the SPSC.
+- Wake order for handoff is still push, then `eventfd` write. Admitted output sets a dirty index under its own mutex, then writes the eventfd. `wait_timeout_ms` returns 0 while any slot is scheduled, so a missed wake does not sleep past the pending bytes.
+- Frame length is checked against `max_frame_size` before payload allocation.
+- io_uring recv and send buffers stay on the connection until the CQE. Partial sends consume `res` bytes and submit the rest. Cancel completions are counted. `io_uring_queue_exit` runs after a drain attempt. Accept stays on epoll; that is deliberate and untested as an io_uring operation because it was not implemented.
+- `Echo.IoUringIfAvailable` requires `active_backend() == IoUring` and an empty `backend_note()` on this guest. It did not skip.
+- `Echo.LargePayloadRoundTrip` echoes 256 KiB, which does not fit in one small write.
+- Callback exceptions are caught. `Echo.CallbackExceptionDoesNotKillServer` still passes.
+- `libfluxnet.a` has no Asio symbols. `fluxnet_asio_echo` is a separate binary.
+
+## Commands after the fixes
+
+```bash
+ctest --test-dir build --output-on-failure       # 9/9, 38 gtest cases
+ctest --test-dir build-asan --output-on-failure  # 9/9
+ctest --test-dir build-ubsan --output-on-failure # 9/9
+ctest --test-dir build-tsan --output-on-failure  # 9/9
+```
+
+Integration in each of those was about 15 seconds. No sanitizer suppression was added. The 600 second soak is not a TSan run.
 
 ## Remaining limits
 
-### Medium — cross-thread `try_send` can drop after it returns `Accepted`
+### Low — bytes accepted and then discarded on close
 
-`Accepted` means the task was queued on the owner. If that worker later cannot enqueue because of the output cap, the frame is counted in `send_backpressured` and is not sent. Callers that need a hard answer must use the blocking `send` from a non-worker thread, or handle `on_backpressure`. This is documented. It is easy to misuse.
-
-### Medium — benchmark percentiles with multiple generator threads are not merged
-
-`fluxnet_bench` reports the max of per-thread percentiles. The 4-worker p99 of 4.13 ms is the worse thread, not a combined histogram. Throughput is summed and is fine. Do not quote that p99 as a single merged percentile.
+If the connection closes before the owner writes, queued frames are dropped. The caller was told `Accepted`. The close or `on_disconnect` is the signal. A live connection does not drop an accepted frame to satisfy the cap.
 
 ### Low — acceptor is epoll even when workers are io_uring
 
-Deliberate. Accept is not the data path. The README and `docs/io-backends.md` say so. A benchmark that says "io_uring" means worker recv/send.
+Deliberate. `EMFILE` drops listen interest for 50 ms. That was not reimplemented as io_uring accept. A benchmark that says "io_uring" means worker recv/send.
 
 ### Low — one global log level and `SIGPIPE` ignored for the process
 
 `run()` sets both. Two servers in one process share them.
 
-### Low — `close` during `on_disconnect` is a no-op
+### Low — `send` during `on_disconnect` returns `Closed`
 
-`destroy_conn` sets `destroyed` before the callback so `send` returns `Closed`. That avoids re-entering destroy. Applications that need to flush from `on_disconnect` cannot.
+The slot is closed to new admits before the callback so a send cannot observe a half-destroyed connection. Applications that need to flush from `on_disconnect` cannot.
 
 ### Not claimed
 
-- No proof of absence of bugs beyond the tests and the sanitizer runs listed in `PROGRESS.md`.
-- ASan was the default leak detector plus address checking. It reported no failures. That is not a proof about every shutdown path.
-- TSan passed the current tests after the broker fix. It does not cover a long soak.
-- The 45 second soak had 0 failures. It is not a durability test.
-
-## Commands
-
-```bash
-ctest --test-dir build --output-on-failure          # 9/9, before clang-format
-ctest --test-dir build-asan --output-on-failure     # 9/9
-ctest --test-dir build-ubsan --output-on-failure    # 9/9
-ctest --test-dir build-tsan --output-on-failure     # 9/9 after the broker lifetime fix
-```
-
-`clang-format -i` ran after those sanitizer ctests. After formatting, the debug integration binary was rebuilt and passed 10/10 (`fluxnet_integration`, about 14.5 s). Codec (5) and the SPSC thread tests (2) were also re-run. The sanitizer ctests themselves were not repeated after formatting.
+- No proof of absence of bugs beyond the tests, the sanitizer runs, the benchmark matrix, the 10000 idle connections, and the 600 second soak.
+- ASan was address and leak checking on the test suite. It reported no failures. That is not a proof about every shutdown path.
+- TSan passed the test suite, including cross-thread `try_send` while the owner was blocked. It did not run during the soak.
+- 1M messages/s was not reached. The highest FluxNet figure in `results/raw/` is 401951 msgs/s over 600 seconds, and 369486 msgs/s on the 2 second 4-worker run.
+- Single 2 second samples are not a confidence interval. The pool, gather, and affinity comparisons are one run each and were treated as noise.
+- `perf`, Valgrind, libFuzzer, Docker, and CrashLab were not available. No counters, no fault-injection schema, and no container run are claimed.
