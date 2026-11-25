@@ -25,10 +25,16 @@ int main(int argc, char** argv) {
             config.io_backend = fluxnet::IoBackend::Epoll;
         } else if (arg == "--affinity") {
             config.cpu_affinity = true;
+        } else if (arg == "--no-pool") {
+            config.use_buffer_pool = false;
+        } else if (arg == "--no-gather") {
+            config.scatter_gather = false;
+        } else if (arg == "--least-loaded") {
+            config.load_balance = fluxnet::LoadBalance::LeastLoaded;
         } else {
             std::cerr << "usage: fluxnet_echo [--host H] [--port P] [--workers N] [--edge] "
-                         "[--uring|--epoll] "
-                         "[--affinity]\n";
+                         "[--uring|--epoll] [--affinity] [--no-pool] [--no-gather] "
+                         "[--least-loaded]\n";
             return 2;
         }
     }

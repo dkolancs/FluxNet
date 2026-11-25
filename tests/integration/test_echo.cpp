@@ -203,3 +203,37 @@ TEST(Echo, IoUringIfAvailable) {
               fluxnet::SendResult::Accepted);
     EXPECT_TRUE(gate.wait_for(1, std::chrono::seconds(2))) << running.server.backend_note();
 }
+
+TEST(Echo, LargePayloadRoundTrip) {
+    auto config = echo_config(1, fluxnet::EpollTrigger::Level);
+    config.shutdown_timeout = std::chrono::milliseconds(100);
+    Running running(config);
+    running.server.set_on_message([](fluxnet::Connection& conn, fluxnet::MessageView msg) {
+        EXPECT_EQ(conn.send(msg.type(), msg.payload(), msg.flags()), fluxnet::SendResult::Accepted);
+    });
+    running.start();
+    fluxnet::ClientConfig client_config;
+    client_config.host = "127.0.0.1";
+    client_config.port = running.server.bound_port();
+    client_config.io_backend = fluxnet::IoBackend::Epoll;
+    client_config.idle_timeout = std::chrono::milliseconds(0);
+    client_config.slow_consumer_timeout = std::chrono::milliseconds(0);
+    client_config.shutdown_timeout = std::chrono::milliseconds(100);
+    fluxnet::test::Gate gate;
+    std::size_t got = 0;
+    RunningClient client(client_config);
+    client.client.set_on_message([&](fluxnet::Connection&, fluxnet::MessageView msg) {
+        got = msg.payload().size();
+        gate.notify();
+    });
+    client.start();
+    auto id = client.client.connect();
+    ASSERT_TRUE(id.valid());
+    std::vector<std::byte> payload(256 * 1024, std::byte{0x5a});
+    payload[0] = std::byte{1};
+    payload.back() = std::byte{2};
+    ASSERT_EQ(client.client.send(id, fluxnet::MessageType::Data, payload, 0),
+              fluxnet::SendResult::Accepted);
+    ASSERT_TRUE(gate.wait_for(1, std::chrono::seconds(2)));
+    EXPECT_EQ(got, payload.size());
+}
