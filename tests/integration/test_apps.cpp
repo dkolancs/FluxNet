@@ -151,6 +151,49 @@ TEST(PubSub, FanoutAndUnsubscribe) {
     }
 }
 
+TEST(PubSub, DisconnectRemovesSubscription) {
+    fluxnet::ServerConfig config;
+    config.host = "127.0.0.1";
+    config.port = 0;
+    config.worker_threads = 2;
+    config.io_backend = fluxnet::IoBackend::Epoll;
+    config.idle_timeout = std::chrono::milliseconds(0);
+    config.slow_consumer_timeout = std::chrono::milliseconds(0);
+    ServerThread running(config);
+    fluxnet::examples::Broker broker(running.server);
+    running.server.set_on_message(
+        [&](fluxnet::Connection& connection, fluxnet::MessageView message) {
+            broker.on_message(connection, message);
+        });
+    running.server.set_on_disconnect(
+        [&](fluxnet::Connection& connection) { broker.on_disconnect(connection); });
+    running.start();
+
+    ClientThread client(client_cfg(running.server.bound_port()));
+    fluxnet::test::Gate gate;
+    client.client.set_on_message(
+        [&](fluxnet::Connection&, fluxnet::MessageView) { gate.notify(); });
+    client.start();
+    const auto id = client.client.connect();
+    ASSERT_TRUE(id.valid());
+    ASSERT_EQ(client.client.send(id, fluxnet::MessageType::Data, bytes("SUB only"), 0),
+              fluxnet::SendResult::Accepted);
+    ASSERT_TRUE(gate.wait_for(1, std::chrono::seconds(2)));
+    EXPECT_EQ(broker.topics(), 1u);
+    client.client.close(id);
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+    while (std::chrono::steady_clock::now() < deadline &&
+           running.server.metrics().disconnects < 1) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    }
+    EXPECT_GE(running.server.metrics().disconnects, 1u);
+    EXPECT_EQ(broker.topics(), 0u);
+    running.server.stop();
+    if (running.thread.joinable()) {
+        running.thread.join();
+    }
+}
+
 TEST(Kv, SetGetDelete) {
     fluxnet::examples::Store store(128);
     EXPECT_EQ(store.command("PING"), "PONG");

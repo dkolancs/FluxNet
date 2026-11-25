@@ -21,6 +21,7 @@
 #include <memory>
 #include <mutex>
 #include <queue>
+#include <shared_mutex>
 #include <string>
 #include <sys/uio.h>
 #include <thread>
@@ -177,6 +178,20 @@ struct EarlierTimer {
     bool operator()(const TimerNode& a, const TimerNode& b) const { return a.when > b.when; }
 };
 
+// Per-slot outbound admission. The slot object outlives Conn so a non-owner
+// thread can admit a frame without touching a connection the owner might free.
+// Accepted means the frame is in `frames` (or already spliced) and `admitted`
+// counts it. Backpressured means it was not pushed.
+struct OutboundSlot {
+    std::mutex mu;
+    std::uint32_t generation = 0;
+    std::size_t admitted = 0;
+    bool open = false;
+    bool scheduled = false;
+    bool flushing = false; // owning worker only
+    std::deque<std::vector<std::byte>> frames;
+};
+
 // Defined in uring.cpp. Header stays free of liburing.
 class UringDriver {
   public:
@@ -225,6 +240,9 @@ class Worker {
 
     SendResult enqueue(Conn* conn, MessageType type, std::span<const std::byte> payload,
                        std::uint16_t flags);
+    // Any thread. Admission completes before this returns. See DESIGN.md.
+    SendResult admit(ConnectionId id, MessageType type, std::span<const std::byte> payload,
+                     std::uint16_t flags);
     void request_close(Conn* conn, int err, CloseReason why);
 
     void collect(MetricsSnapshot& into) const;
@@ -263,6 +281,13 @@ class Worker {
     void defer_write(Conn* conn);
     int fill_iov(Conn* conn, struct iovec* iov, int max_count);
     void consume_output(Conn* conn, std::size_t n);
+    void bind_outbound(std::uint32_t index, std::uint32_t generation, bool open);
+    void clear_outbound(std::uint32_t index);
+    void allow_output(Conn* conn);
+    void flush_slot(std::uint32_t index);
+    void drain_outbound();
+    OutboundSlot* find_outbound(std::uint32_t index);
+    std::size_t admitted_bytes(const Conn* conn);
     void touch(Conn* conn);
     void invoke_connect(Conn* conn);
     void invoke_backpressure(Conn* conn, bool paused);
@@ -295,6 +320,13 @@ class Worker {
 
     std::vector<std::unique_ptr<Conn>> slots_;
     std::vector<std::uint32_t> generations_;
+    // Grown under outbound_map_mu_. Slot objects are never freed, so a raw
+    // pointer taken under the shared lock stays valid.
+    std::shared_mutex outbound_map_mu_;
+    std::vector<std::unique_ptr<OutboundSlot>> outbound_;
+    std::mutex dirty_mu_;
+    std::vector<std::uint32_t> dirty_;
+    std::atomic<std::uint32_t> outbound_scheduled_{0};
     std::vector<std::uint32_t> free_list_;
     std::vector<std::uint32_t> deferred_reads_;
     std::vector<std::uint32_t> deferred_writes_;
