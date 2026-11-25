@@ -557,5 +557,5 @@ int main(int argc, char** argv) {
     std::cout << "completed=" << all.completed << " failures=" << all.failures
               << " connect_failures=" << all.connect_failures << " msgs/s=" << msgs_s
               << " p50_ns=" << p50 << " p99_ns=" << p99 << "\n";
-    return all.completed == 0 ? 1 : 0;
+    return (all.completed == 0 || all.failures > 0) ? 1 : 0;
 }

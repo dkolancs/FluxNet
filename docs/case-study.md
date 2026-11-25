@@ -34,6 +34,6 @@ The SPSC microbenchmark was 1.17 ns versus 8.72 ns for an uncontended mutex push
 
 Registered buffers probed successfully and are not on the data path. Multishot recv returned EINVAL and is not used. The acceptor now submits `IORING_OP_ACCEPT` on its own ring when the worker backend is io_uring, and falls back to epoll if that ring fails. EMFILE still pauses accepts for 50 ms, via a timeout completion. No claim that the pool or affinity is faster. The CrashLab YAML matches the real schema and was not run, because Docker did not start and the probe is HTTP. A local `stress-ng` CPU run is in `results/raw/fault-cpu-*.json` and is labeled as not CrashLab. No license file. The README suggests MIT if someone adds one later.
 
-A later 2 second matrix is in `BENCHMARKS.md`. Three repeats of the 10-connection 64-byte epoll case were 201612, 203446, and 203478 msgs/s. Five thousand active connections did 240632 msgs/s with p99 about 58 ms. That is not 1M msgs/s, and it is not 10000 active connections.
+A later 2 second matrix is in `BENCHMARKS.md`. Three repeats of the 10-connection 64-byte epoll case were 201612, 203446, and 203478 msgs/s. Five thousand active connections did 240632 msgs/s with p99 about 58 ms. Ten thousand active connections, with the echo cap raised to 20000, did 439820 msgs/s with p99 about 40 ms and 0 failures (`results/raw/epoll-1w-c10000-p64.json`). That is not 1M msgs/s.
 
 The benchmark JSON says git `ecc7a98`, which is the commit that contained the admission fix and the Asio baseline when the binaries were run.

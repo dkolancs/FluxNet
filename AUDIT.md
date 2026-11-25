@@ -92,4 +92,6 @@ The slot is closed to new admits before the callback so a send cannot observe a 
 - 1M messages/s was still not reached. The 5000-connection active run was 240632 msgs/s with a much larger tail (`results/raw/epoll-1w-c5000-p64.json`).
 - ASan, UBSan, and TSan were rerun after acceptor io_uring (`ctest -LE stress`, 9/9 each). `fluxnet_stress` was then run under the ASan and TSan binaries and passed. The 600 second soak was not a sanitizer run.
 - Valgrind on `fluxnet_unit_codec` reported 0 errors. libFuzzer did not link. `perf` was not installed. Docker's daemon did not start. `tc` was EPERM. CrashLab's schema was read and the YAML was not executed. The `stress-ng` numbers are a local CPU run, not a CrashLab report.
-- This is still not release-ready.
+- This is still not release-ready. Docker did not start, `perf` is not installed, and the 24-hour soak was not started.
+- ThreadSanitizer needed `tests/tsan.supp` for liburing ring-address reuse. See LIMITATIONS.md. The suppression does not cover FluxNet source.
+- libFuzzer ran 200 decoder inputs via `scripts/fuzz_decode.sh` with no crash. Valgrind `--leak-check=full` passed the six unit binaries.

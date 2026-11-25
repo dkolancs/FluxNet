@@ -19,7 +19,8 @@ Facts below were read on this machine during this session. They are not a generi
 - `tc` is installed. `tc qdisc add dev lo root netem delay 1ms` returned `Operation not permitted`.
 - `stress-ng` is installed and was used by `experiments/faults/cpu_stress.sh`. That is not CrashLab.
 - CrashLab: the repository `github.com/dkolancs/CrashLab` exists. It was not cloned onto this machine. `crashlab/experiments/echo-latency.yaml` matches its file schema and was not run. See `crashlab/INTEGRATION.md`.
-- libFuzzer: `clang -fsanitize=fuzzer` failed to link (`libclang_rt.fuzzer-x86_64.a` missing, and this Clang also did not find `-lstdc++`). The in-process fuzz driver remains the fuzz test.
+- libFuzzer: `scripts/fuzz_decode.sh` compiled with `libclang-rt-18-dev` and ran 200 inputs (`Done 200 runs`, exit 0). Clang needs the g++ include and library paths on this guest.
+- ThreadSanitizer reports data races inside `liburing.h` when a destroyed probe ring and a later worker ring reuse the same `anon_inode:[io_uring]` address. `tests/tsan.supp` suppresses those three liburing functions. It does not suppress FluxNet stacks. With that file, TSan ctest passed.
 - Git identity for new commits: `Divith Reddy Kolan <dkolan@asu.edu>`, repo-local config only. Nothing was pushed. The initial commit still contains a historical `Co-authored-by` trailer. It was not rewritten. A local commit-msg hook tries to append `Co-authored-by: dkolancs <dkolancs@users.noreply.github.com>`; commits in this pass were created with that hook disabled so the trailer is not on the new commits.
 
 ## Toolchain (after installing missing packages)

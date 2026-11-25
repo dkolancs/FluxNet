@@ -5,6 +5,18 @@ services:
     build: .
     command: ["./build/examples/fluxnet_echo", "--host", "0.0.0.0", "--port", "9000", "--workers", "2"]
     networks: [fluxnet]
+  crashlab-http:
+    build: .
+    command:
+      [
+        "./build/examples/fluxnet_crashlab_http",
+        "--listen", "8081",
+        "--echo-host", "echo",
+        "--echo-port", "9000",
+      ]
+    ports: ["8081:8081"]
+    depends_on: [echo]
+    networks: [fluxnet]
   load:
     build: .
     command:

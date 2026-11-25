@@ -107,6 +107,23 @@ This does not mean the server is faster with the SPSC. The server was not in thi
 
 `results/legacy-unmerged/soak-45s.json` is a 45 second run from before the histogram merge. It is not this soak.
 
+### One hour
+
+`DURATION=3600 PORT=19520 BUILD=build-release bash scripts/soak.sh` wrote `results/raw/soak-3600s.json`. The script log timestamps are `2026-11-25T03:00:51Z` to `2026-11-25T04:00:52Z` (about 3601 seconds of wall clock, including startup and 1 second of warmup). `duration_s` is 3600. Exit code 0.
+
+| | |
+| --- | --- |
+| server | epoll LT, 2 workers |
+| connections | 32 |
+| payload | 64 |
+| generator threads | 2 |
+| completed | 1411841756 |
+| failures | 0 |
+| msgs/s | 392178 |
+| p50 / p99 / p99.9 / max ns | 65024 / 143360 / 315392 / 34203668 |
+
+A 24-hour soak was not started. The command, if someone runs it, is `DURATION=86400 PORT=19521 bash scripts/soak.sh`.
+
 ## Later short matrix
 
 `scripts/benchmark_matrix.sh` on the same guest, Release, duration 2 s, warmup 0.5 s, one server at a time. The measurement window starts after the generator finishes connecting. These are single samples except the three repeats. Failures were 0 in every file below.
@@ -123,10 +140,13 @@ This does not mean the server is faster with the SPSC. The server was not in thi
 | `epoll-1w-c10-p64-openloop.json` | 50000 | 52224 | `--rate 50000`, `behind_schedule` 983 |
 | `epoll-1w-c4-p64-churn.json` | 191842 | 40960 | 4 conn, `--churn-seconds 0.5`, connect_failures 0 |
 | `epoll-1w-c5000-p64.json` | 240632 | 58195968 | 1 worker, 5000 conn, 4 client threads, p50 12189696 ns |
+| `epoll-1w-c10000-p64.json` | 439820 | 40370176 | 1 worker, 10000 conn, `--max-connections 20000`, 4 client threads, p50 24903680 ns, failures 0, connect_failures 0 |
 
 Repeat msgs/s min 201612, median 203446, max 203478. That spread is about 1 percent. It is not a confidence interval for the other rows.
 
-Eight workers were not run. `results/raw/workers-8-not-applicable.txt` records that this guest has 4 CPUs. 10000 active senders were not run after the 5000-connection row.
+Eight workers were not run. `results/raw/workers-8-not-applicable.txt` records that this guest has 4 CPUs. 10000 active senders did run; see `epoll-1w-c10000-p64.json`.
+
+`results/raw/pool-echo.txt` is one echoed message with the pool on (`pool_acquires=1 pool_allocs=1 pool_reuses=0 pool_bytes_in_use=0 pool_bytes_high_watermark=1024`) and the pool disabled (`nopool_reuses=0`). Disabled still allocates a direct buffer, so acquires are not zero. Reuse stays zero. The earlier `--no-pool` throughput file is `epoll-1w-c10-p64-nopool.json`.
 
 `results/raw/fault-cpu-before.json`, `fault-cpu-during.json`, and `fault-cpu-after.json` are a local `stress-ng --cpu 2` run, not CrashLab: 201611, 189836, and 202305 msgs/s, all with 0 failures. `tc` returned `EPERM`, and the Docker daemon socket was not created, so netem and compose were not run.
 

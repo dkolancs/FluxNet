@@ -1,11 +1,14 @@
+#include "fluxnet/client.hpp"
 #include "fluxnet/server.hpp"
 #include "net/socket.hpp"
 #include "support/wait.hpp"
 
 #include <gtest/gtest.h>
 
+#include <atomic>
 #include <chrono>
 #include <condition_variable>
+#include <fstream>
 #include <mutex>
 #include <thread>
 #include <vector>
@@ -170,4 +173,181 @@ TEST(Dispatch, LeastLoadedReturnsToIdleWorker) {
     EXPECT_EQ(a, b);
     server.stop();
     thread.join();
+}
+
+TEST(Admission, ConcurrentTrySendMatchesCap) {
+    auto config = capped();
+    fluxnet::Server server(config);
+    std::mutex mu;
+    std::condition_variable cv;
+    bool entered = false;
+    bool release = false;
+    fluxnet::ConnectionId id;
+    server.set_on_connect([&](fluxnet::Connection& connection) {
+        {
+            std::lock_guard lock(mu);
+            id = connection.id();
+            entered = true;
+        }
+        cv.notify_all();
+        std::unique_lock lock(mu);
+        cv.wait(lock, [&] { return release; });
+    });
+    std::thread thread([&] { server.run(); });
+    ASSERT_TRUE(server.wait_until_running(std::chrono::seconds(2)));
+    fluxnet::detail::Socket client = fluxnet::detail::Socket::tcp_v4();
+    ASSERT_EQ(client.connect_v4("127.0.0.1", server.bound_port()).status,
+              fluxnet::detail::ConnectStatus::Connected);
+    {
+        std::unique_lock lock(mu);
+        ASSERT_TRUE(cv.wait_for(lock, std::chrono::seconds(2), [&] { return entered; }));
+    }
+    std::atomic<int> accepted{0};
+    std::atomic<int> backpressured{0};
+    const std::vector<std::byte> payload(8, std::byte{1});
+    std::vector<std::thread> senders;
+    for (int t = 0; t < 4; ++t) {
+        senders.emplace_back([&] {
+            for (int i = 0; i < 8; ++i) {
+                const auto result = server.try_send(id, fluxnet::MessageType::Data, payload, 0);
+                if (result == fluxnet::SendResult::Accepted) {
+                    accepted.fetch_add(1);
+                } else if (result == fluxnet::SendResult::Backpressured) {
+                    backpressured.fetch_add(1);
+                }
+            }
+        });
+    }
+    for (auto& sender : senders) {
+        sender.join();
+    }
+    EXPECT_EQ(accepted.load() + backpressured.load(), 32);
+    EXPECT_LE(accepted.load(), 4);
+    EXPECT_GE(backpressured.load(), 28);
+    {
+        std::lock_guard lock(mu);
+        release = true;
+    }
+    cv.notify_all();
+    server.stop();
+    thread.join();
+}
+
+TEST(Pool, EchoUsesPoolAndReleases) {
+    fluxnet::ServerConfig config;
+    config.host = "127.0.0.1";
+    config.port = 0;
+    config.worker_threads = 1;
+    config.idle_timeout = std::chrono::milliseconds(0);
+    config.slow_consumer_timeout = std::chrono::milliseconds(0);
+    config.use_buffer_pool = true;
+    fluxnet::Server server(config);
+    fluxnet::test::Gate gate;
+    server.set_on_message([&](fluxnet::Connection& conn, fluxnet::MessageView msg) {
+        conn.send(msg.type(), msg.payload(), msg.flags());
+        gate.notify();
+    });
+    std::thread thread([&] { server.run(); });
+    ASSERT_TRUE(server.wait_until_running(std::chrono::seconds(2)));
+    fluxnet::ClientConfig client_config;
+    client_config.host = "127.0.0.1";
+    client_config.port = server.bound_port();
+    client_config.idle_timeout = std::chrono::milliseconds(0);
+    client_config.slow_consumer_timeout = std::chrono::milliseconds(0);
+    fluxnet::Client client(client_config);
+    std::thread client_thread([&] { client.run(); });
+    ASSERT_TRUE(client.wait_until_running(std::chrono::seconds(2)));
+    auto id = client.connect();
+    ASSERT_TRUE(id.valid());
+    std::vector<std::byte> payload{std::byte{7}};
+    ASSERT_EQ(client.send(id, fluxnet::MessageType::Data, payload, 0),
+              fluxnet::SendResult::Accepted);
+    ASSERT_TRUE(gate.wait_for(1, std::chrono::seconds(2)));
+    EXPECT_GT(server.metrics().pool_acquires, 0u);
+    client.close(id);
+    client.stop();
+    client_thread.join();
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+    while (std::chrono::steady_clock::now() < deadline && server.metrics().pool_bytes_in_use != 0) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    }
+    EXPECT_EQ(server.metrics().pool_bytes_in_use, 0u);
+    if (const char* path = std::getenv("FLUXNET_POOL_NOTE")) {
+        std::ofstream out(path);
+        out << "pool_acquires=" << server.metrics().pool_acquires
+            << " pool_reuses=" << server.metrics().pool_reuses
+            << " pool_allocs=" << server.metrics().pool_allocs
+            << " pool_bytes_in_use=" << server.metrics().pool_bytes_in_use
+            << " pool_bytes_high_watermark=" << server.metrics().pool_bytes_high_watermark << "\n";
+    }
+    server.stop();
+    thread.join();
+}
+
+TEST(Pool, DisabledPoolDoesNotAcquire) {
+    fluxnet::ServerConfig config;
+    config.host = "127.0.0.1";
+    config.port = 0;
+    config.worker_threads = 1;
+    config.idle_timeout = std::chrono::milliseconds(0);
+    config.slow_consumer_timeout = std::chrono::milliseconds(0);
+    config.use_buffer_pool = false;
+    fluxnet::Server server(config);
+    fluxnet::test::Gate gate;
+    server.set_on_message([&](fluxnet::Connection& conn, fluxnet::MessageView msg) {
+        conn.send(msg.type(), msg.payload(), msg.flags());
+        gate.notify();
+    });
+    std::thread thread([&] { server.run(); });
+    ASSERT_TRUE(server.wait_until_running(std::chrono::seconds(2)));
+    fluxnet::ClientConfig client_config;
+    client_config.host = "127.0.0.1";
+    client_config.port = server.bound_port();
+    client_config.idle_timeout = std::chrono::milliseconds(0);
+    client_config.slow_consumer_timeout = std::chrono::milliseconds(0);
+    fluxnet::Client client(client_config);
+    std::thread client_thread([&] { client.run(); });
+    ASSERT_TRUE(client.wait_until_running(std::chrono::seconds(2)));
+    auto id = client.connect();
+    ASSERT_TRUE(id.valid());
+    std::vector<std::byte> payload{std::byte{7}};
+    ASSERT_EQ(client.send(id, fluxnet::MessageType::Data, payload, 0),
+              fluxnet::SendResult::Accepted);
+    ASSERT_TRUE(gate.wait_for(1, std::chrono::seconds(2)));
+    EXPECT_EQ(server.metrics().pool_reuses, 0u);
+    if (const char* path = std::getenv("FLUXNET_POOL_NOTE")) {
+        std::ofstream out(path, std::ios::app);
+        out << "nopool_acquires=" << server.metrics().pool_acquires
+            << " nopool_reuses=" << server.metrics().pool_reuses << "\n";
+    }
+    client.stop();
+    client_thread.join();
+    server.stop();
+    thread.join();
+}
+
+TEST(Shutdown, StopWhileConnecting) {
+    fluxnet::ServerConfig config;
+    config.host = "127.0.0.1";
+    config.port = 0;
+    config.worker_threads = 1;
+    config.shutdown_timeout = std::chrono::milliseconds(200);
+    config.idle_timeout = std::chrono::milliseconds(0);
+    config.slow_consumer_timeout = std::chrono::milliseconds(0);
+    fluxnet::Server server(config);
+    std::thread thread([&] { server.run(); });
+    ASSERT_TRUE(server.wait_until_running(std::chrono::seconds(2)));
+    std::atomic<bool> go{true};
+    std::thread churn([&] {
+        while (go.load()) {
+            fluxnet::detail::Socket socket = fluxnet::detail::Socket::tcp_v4();
+            socket.connect_v4("127.0.0.1", server.bound_port());
+        }
+    });
+    std::this_thread::sleep_for(std::chrono::milliseconds(30));
+    server.stop();
+    go.store(false);
+    churn.join();
+    thread.join();
+    EXPECT_EQ(server.state(), fluxnet::ServerState::Stopped);
 }
