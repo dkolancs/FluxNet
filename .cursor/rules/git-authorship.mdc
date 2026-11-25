@@ -1,0 +1,12 @@
+---
+description: Git authorship restrictions
+alwaysApply: true
+---
+
+# Git authorship
+
+- Before any commit, run `git config --get user.name` and `git config --get user.email`. Do not change git config. Do not invent an identity.
+- If the configured name or email is missing, or looks like Cursor, Claude, OpenAI, Anthropic, or any AI agent, do not commit. Record the blocker in PROGRESS.md and keep the files in the working tree.
+- No `Co-authored-by`, `Generated-by`, or agent signatures. Do not rewrite history.
+- Do not push, publish a release, or change remotes unless the user explicitly authorizes a push. This task forbids push.
+- Commit only at a verified milestone, and only when the identity is a real personal identity. The message must match what was built and tested.

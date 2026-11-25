@@ -1,0 +1,71 @@
+name: ci
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  gcc:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: packages
+        run: sudo apt-get update && sudo apt-get install -y ninja-build liburing-dev pkg-config
+      - name: debug
+        run: |
+          cmake -S . -B build-debug -G Ninja -DCMAKE_BUILD_TYPE=Debug -DCMAKE_CXX_COMPILER=g++
+          cmake --build build-debug -j
+          ctest --test-dir build-debug --output-on-failure
+      - name: release
+        run: |
+          cmake -S . -B build-release -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_COMPILER=g++ -DFLUXNET_BUILD_TESTS=OFF
+          cmake --build build-release -j --target fluxnet_echo fluxnet_bench
+  clang:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: packages
+        run: sudo apt-get update && sudo apt-get install -y ninja-build liburing-dev pkg-config clang g++
+      - name: debug
+        # clang on this image may not search gcc's libstdc++ unless LIBRARY_PATH is set.
+        run: |
+          export LIBRARY_PATH="/usr/lib/gcc/x86_64-linux-gnu/13:${LIBRARY_PATH:-}"
+          cmake -S . -B build-clang -G Ninja -DCMAKE_BUILD_TYPE=Debug -DCMAKE_CXX_COMPILER=clang++
+          cmake --build build-clang -j
+          ctest --test-dir build-clang --output-on-failure
+  asan-ubsan:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: packages
+        run: sudo apt-get update && sudo apt-get install -y ninja-build liburing-dev pkg-config
+      - name: asan
+        run: |
+          cmake -S . -B build-asan -G Ninja -DCMAKE_BUILD_TYPE=Debug -DCMAKE_CXX_COMPILER=g++ -DFLUXNET_SANITIZER=address -DFLUXNET_BUILD_BENCHMARKS=OFF
+          cmake --build build-asan -j
+          ctest --test-dir build-asan --output-on-failure
+      - name: ubsan
+        run: |
+          cmake -S . -B build-ubsan -G Ninja -DCMAKE_BUILD_TYPE=Debug -DCMAKE_CXX_COMPILER=g++ -DFLUXNET_SANITIZER=undefined -DFLUXNET_BUILD_BENCHMARKS=OFF
+          cmake --build build-ubsan -j
+          ctest --test-dir build-ubsan --output-on-failure
+  tsan:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: packages
+        run: sudo apt-get update && sudo apt-get install -y ninja-build liburing-dev pkg-config
+      - name: tsan
+        run: |
+          cmake -S . -B build-tsan -G Ninja -DCMAKE_BUILD_TYPE=Debug -DCMAKE_CXX_COMPILER=g++ -DFLUXNET_SANITIZER=thread -DFLUXNET_BUILD_BENCHMARKS=OFF
+          cmake --build build-tsan -j
+          ctest --test-dir build-tsan --output-on-failure
+  format:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: packages
+        run: sudo apt-get update && sudo apt-get install -y clang-format
+      - name: check
+        run: |
+          find include src tests examples benchmarks -name '*.hpp' -o -name '*.cpp' | xargs clang-format --dry-run --Werror

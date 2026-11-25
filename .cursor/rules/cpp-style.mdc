@@ -1,0 +1,15 @@
+---
+description: C++20 style and readability for FluxNet
+globs: "**/*.{hpp,h,cpp,cc}"
+alwaysApply: true
+---
+
+# C++ style
+
+- C++20 only. Linux system calls are the networking primitives (socket, epoll, eventfd, timerfd, signalfd, io_uring).
+- Do not add Boost.Asio, libuv, or another networking framework to the core library. Boost.Asio is allowed only as an optional comparison target behind its own CMake option.
+- liburing stays behind `FLUXNET_HAS_IO_URING` and must not be required for the epoll path to build.
+- Write code an undergraduate can defend: small functions, named invariants, comments on memory orders and ownership, not on obvious control flow.
+- RAII for every fd, buffer, and thread. Move-only types for ownership. No bare `new`/`delete` outside the buffer pool and no bare `close` outside `FileDescriptor`.
+- Error policy: `std::system_error` / `std::invalid_argument` for setup failures. Connection I/O failures stay on the connection (callback + close), they do not tear down the process.
+- Do not leave stub methods that look implemented. If a path is unavailable, report it through the backend note and the status docs.

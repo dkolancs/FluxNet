@@ -1,0 +1,25 @@
+build/
+build-*/
+cmake-build-*/
+CMakeUserPresets.json
+compile_commands.json
+.cache/
+.vscode/
+.idea/
+
+# Large or machine-local benchmark artifacts. Small JSON/CSV under results/raw
+# are kept when they come from a real run.
+results/**/*.bin
+*.core
+# A bare "core" name also matches the source directory src/core/.
+/core
+core.[0-9]*
+vgcore.*
+
+# Credentials and local env
+.env
+.env.*
+*.pem
+*.key
+id_rsa
+id_ed25519
