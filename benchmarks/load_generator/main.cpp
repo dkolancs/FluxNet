@@ -368,28 +368,17 @@ int main(int argc, char** argv) {
         all.bytes += item.bytes;
         all.behind += item.behind;
     }
-    // Rebuild a combined histogram by not merging buckets (each thread has its own).
-    // Percentiles below are from thread 0 only when threads>1 is a limitation we avoid
-    // by summing via a second pass: record is not shared. Merge by weighted note:
-    fluxnet::detail::LogHistogram merged =
-        totals.empty() ? fluxnet::detail::LogHistogram{} : totals[0].hist;
-    // LogHistogram has no merge. Use thread 0 for percentiles and sum counts from all
-    // for throughput. If threads>1, re-aggregate by exposing nothing: document p* from
-    // the first thread AND also compute a crude combined max. Better: add counts in main
-    // by changing Totals to be merged under a mutex inside record. For honesty, merge
-    // min/max/count from all and percentiles from a histogram we fill... we can't see
-    // buckets. Change: record into one histogram under a mutex. Too late for this file
-    // structure. I'll report percentiles as the max across threads of each percentile,
-    // which does not under-report the slowest thread's bucket. Throughput uses the sum.
-    std::uint64_t p50 = 0, p95 = 0, p99 = 0, p999 = 0, max_v = 0;
+    // Merge thread-local buckets before percentiles. The max of per-thread
+    // percentiles is not the percentile of the combined sample.
+    fluxnet::detail::LogHistogram merged;
     for (const auto& item : totals) {
-        p50 = std::max(p50, item.hist.percentile(0.50));
-        p95 = std::max(p95, item.hist.percentile(0.95));
-        p99 = std::max(p99, item.hist.percentile(0.99));
-        p999 = std::max(p999, item.hist.percentile(0.999));
-        max_v = std::max(max_v, item.hist.max());
-        (void)merged;
+        merged.merge(item.hist);
     }
+    const std::uint64_t p50 = merged.percentile(0.50);
+    const std::uint64_t p95 = merged.percentile(0.95);
+    const std::uint64_t p99 = merged.percentile(0.99);
+    const std::uint64_t p999 = merged.percentile(0.999);
+    const std::uint64_t max_v = merged.max();
     const double seconds = opt.duration_s > 0 ? opt.duration_s : 1;
     const double msgs_s = static_cast<double>(all.completed) / seconds;
     const double bytes_s = static_cast<double>(all.bytes) / seconds;
@@ -428,7 +417,7 @@ int main(int argc, char** argv) {
     out << "  \"p999_ns\": " << p999 << ",\n";
     out << "  \"max_ns\": " << max_v << ",\n";
     out << "  \"histogram\": \"log2 x 64 sub-buckets, percentile is the bucket upper bound; "
-           "multi-thread percentiles are the max across threads\"\n";
+           "multi-thread percentiles are merged bucket counts\"\n";
     out << "}\n";
     std::cout << "completed=" << all.completed << " failures=" << all.failures
               << " msgs/s=" << msgs_s << " p50_ns=" << p50 << " p99_ns=" << p99 << "\n";
