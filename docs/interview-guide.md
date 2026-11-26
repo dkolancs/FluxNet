@@ -31,7 +31,7 @@ epoll: the fd can make progress; you issue `recv`/`sendmsg`. io_uring recv/send:
 
 ## eventfd, timerfd, signalfd
 
-eventfd wakes a worker after a queue push. The consumer drains after the read and also before the next wait. timerfd wakes the same loop for idle and slow-consumer deadlines; the heap is lazy, and a stale node is ignored via generation. signalfd delivers `SIGINT`/`SIGTERM` on the acceptor epoll so the signal path is ordinary code. `SIGPIPE` is ignored because writes pass `MSG_NOSIGNAL`.
+eventfd wakes a worker after a queue push. The consumer drains after the read and also before the next wait. timerfd wakes the same loop for idle and slow-consumer deadlines; the heap is lazy, and a stale node is ignored via generation. signalfd delivers `SIGINT`/`SIGTERM` on the acceptor. When accept is epoll, that fd is in the acceptor epoll set. When accept is io_uring, it is a `POLL_ADD` on the acceptor ring. `SIGPIPE` is ignored because writes pass `MSG_NOSIGNAL`.
 
 ## Confinement, races, mutexes
 
