@@ -62,7 +62,7 @@ ctest --test-dir build-ubsan --output-on-failure # 9/9
 ctest --test-dir build-tsan --output-on-failure  # 9/9
 ```
 
-Integration in each of those was about 15 seconds. No sanitizer suppression was added. The 600 second soak is not a TSan run.
+Integration in each of those was about 15 seconds. That pass added no suppression file. The 600 second soak is not a TSan run. A later `tests/tsan.supp` was added for a liburing warning and then deleted after the feature probe was moved before worker startup. The current tree has no suppression file.
 
 ## Remaining limits
 
@@ -84,14 +84,14 @@ The slot is closed to new admits before the callback so a send cannot observe a 
 
 ### Not claimed
 
-- No proof of absence of bugs beyond the tests, the sanitizer runs, the benchmark matrix, the 10000 idle connections, and the 600 second soak.
+- No proof of absence of bugs beyond the tests, the sanitizer runs, the benchmark matrix, the 10000 idle hold, the 10000-connection active echo, and the 600 second and 3600 second soaks.
 - ASan was address and leak checking on the test suite. It reported no failures. That is not a proof about every shutdown path.
 - TSan passed the test suite, including cross-thread `try_send` while the owner was blocked. It did not run during the soak.
-- 1M messages/s was not reached. The highest FluxNet figure in `results/raw/` is 401951 msgs/s over 600 seconds, and 369486 msgs/s on the 2 second 4-worker run.
+- 1M messages/s was not reached. The highest short FluxNet rate in `results/raw/` is 439820 msgs/s (`epoll-1w-c10000-p64.json`, p99 40370176 ns). The 600 second soak was 401951 msgs/s and the 3600 second soak was 392178 msgs/s. The 4-worker 100-connection run was 369486 msgs/s.
 - Single 2 second samples are not a confidence interval. The pool, gather, and affinity comparisons are one run each and were treated as noise.
-- 1M messages/s was still not reached. The 5000-connection active run was 240632 msgs/s with a much larger tail (`results/raw/epoll-1w-c5000-p64.json`).
-- ASan, UBSan, and TSan were rerun after acceptor io_uring (`ctest -LE stress`, 9/9 each). `fluxnet_stress` was then run under the ASan and TSan binaries and passed. The 600 second soak was not a sanitizer run.
-- Valgrind on `fluxnet_unit_codec` reported 0 errors. libFuzzer did not link. `perf` was not installed. Docker's daemon did not start. `tc` was EPERM. CrashLab's schema was read and the YAML was not executed. The `stress-ng` numbers are a local CPU run, not a CrashLab report.
+- 1M messages/s was still not reached. The 5000-connection active run was 240632 msgs/s and the 10000-connection active run was 439820 msgs/s, both with multi-millisecond tails.
+- ASan, UBSan, and TSan `ctest -LE stress` passed after acceptor io_uring. `fluxnet_stress` passed under ASan, under UBSan, and under TSan on the build from before the probe was moved. It was not repeated after that move. The integration binary was. The 600 second and 3600 second soaks were not sanitizer runs. The ctest count was 9 tests before the adapter test existed and 10 after it was added.
+- `perf` was not installed. Docker's daemon did not start. `tc` was EPERM. CrashLab's schema was read and the YAML was not executed. The adapter that would serve that YAML was tested locally. The `stress-ng` numbers are a local CPU run, not a CrashLab report. An earlier libFuzzer link failed before `libclang-rt-18-dev` was installed; the run that did finish is the next bullet.
 - This is still not release-ready. Docker did not start, `perf` is not installed, and the 24-hour soak was not started.
 - ThreadSanitizer: after the feature probe was moved before worker threads start, the integration binary passed with `TSAN_OPTIONS=halt_on_error=1` and no suppression file (`22` tests). Before that move, `Echo.IoUringTinyRingStillEchoes` reported data races in `liburing.h` on `anon_inode:[io_uring]` between `probe_uring_features` and `UringDriver::submit_poll`. Epoll-only integration (`--gtest_filter=-Echo.IoUring*`, 17 tests) passed with no suppressions on the earlier binary. A private-ring repro that does not share SQEs did not warn. `tests/tsan.supp` was removed rather than left in place.
 - libFuzzer ran 200 decoder inputs via `scripts/fuzz_decode.sh` with no crash. Valgrind `--leak-check=full` passed the six unit binaries.

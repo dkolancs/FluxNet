@@ -20,7 +20,7 @@ Every run below is closed loop with `--outstanding 1`. Open loop (`--rate`) is i
 
 ### What the JSON hash means
 
-`fluxnet_bench` runs `git rev-parse --short HEAD`. These files say `ecc7a98`. That commit is the Asio baseline and the admission fix's parent on this branch. The binaries are the Release build of that commit. Later documentation edits do not change the measured binaries.
+`fluxnet_bench` runs `git rev-parse --short HEAD` when it writes a file. The early closed-loop table, including the Asio row, was produced by binaries at `ecc7a98`. The later matrix files (`epoll-1w-c10-p256.json` through `epoll-1w-c5000-p64.json`, plus the open-loop, churn, and `fault-cpu-*` files) say `54f1df7`. `epoll-1w-c10000-p64.json` and `soak-3600s.json` say `fc55f8e`. A documentation edit does not change a file that was already written.
 
 ### How to reproduce
 
@@ -65,7 +65,7 @@ Against `epoll-1w-c10-p64` (207144 msgs/s, p99 79872 ns):
 
 ### Idle connections
 
-`results/raw/scale-10000.txt` is a separate run, not a throughput test. `fluxnet_echo` with 1 worker, epoll, default `max_connections` 10000, held 10000 idle connections (`connected=10000 failed=0`). No `EMFILE` or `ENFILE` line was in the server log. While they were held, `/proc/<echo-pid>/status` showed `VmRSS` 177052 kB, `VmHWM` 177052 kB, `Threads` 2. The client sockets were in `fluxnet_hold`, not in that RSS. This is not 10000 actively messaging connections. The active case in this table stops at 1000 connections.
+`results/raw/scale-10000.txt` is a separate run, not a throughput test. `fluxnet_echo` with 1 worker, epoll, default `max_connections` 10000, held 10000 idle connections (`connected=10000 failed=0`). No `EMFILE` or `ENFILE` line was in the server log. While they were held, `/proc/<echo-pid>/status` showed `VmRSS` 177052 kB, `VmHWM` 177052 kB, `Threads` 2. The client sockets were in `fluxnet_hold`, not in that RSS. This is not 10000 actively messaging connections. The first active table stops at 1000 connections. A later active run at 5000 and at 10000 is in the matrix section below.
 
 ### Queue microbenchmark
 
@@ -80,18 +80,17 @@ This does not mean the server is faster with the SPSC. The server was not in thi
 
 ### What these runs do not show
 
-- 1M small messages/s was not reached. The highest FluxNet short run was 369486 msgs/s (4 workers, 100 connections, 64 bytes). The Asio 10-connection run was 237147 msgs/s, which is higher than 1-worker epoll on that shape and lower than the 4-worker FluxNet run.
+- 1M small messages/s was not reached. In the early table the highest FluxNet short run was 369486 msgs/s (4 workers, 100 connections, 64 bytes). A later 2 second run at 10000 connections reached 439820 msgs/s with a much larger tail. The Asio 10-connection run was 237147 msgs/s (`results/raw/asio-c10-p64.json`, git `ecc7a98`), higher than 1-worker epoll on that shape (207144 msgs/s, p99 79872 ns versus Asio p99 50176 ns, about 50.2 µs versus 79.9 µs) and lower than the 4-worker FluxNet run. Asio used one `io_context` thread, is not linked into `libfluxnet`, and was not re-run after later server changes.
 - Sub-100 µs p99 held for 1 connection and for the 10-connection epoll, io_uring, thread-per-connection, and Asio runs. It did not hold for 100 connections on 1 worker (557 µs), 1000 connections (6.62 ms), or 4 workers and 100 connections (4.13 ms merged). The 4-worker process used more threads than the 4 vCPUs.
 - On one connection, the blocking server was faster than epoll (84672 vs 79723 msgs/s).
-- io_uring beat 1-worker epoll on the 10-connection case (221519 vs 207144). One run each. The acceptor was still epoll. Worker recv and send were io_uring.
-- Asio was faster than 1-worker epoll on that same 10-connection shape (237147 vs 207144) with a lower p99 (50.2 µs vs 79.9 µs). One run. Asio used one `io_context` thread. It is not linked into `libfluxnet`.
+- io_uring beat 1-worker epoll on the 10-connection case (221519 vs 207144). One run each. That file, `uring-1w-c10-p64.json`, was recorded while the acceptor was still epoll. Worker recv and send were io_uring. It is not a measurement of the later io_uring accept path.
 - The later matrix in the next section did run one open-loop case and one churn case. A slow-read mode exists and is covered by `fluxnet_loadgen_test`, not by this table.
 - `perf` is not installed. No hardware counters were collected.
-- The 600 second measurement is in the soak section. A 1-hour or 24-hour soak was not started.
+- The 600 second measurement and the later 3600 second measurement are both in the soak section. A 24-hour soak was not started.
 
 ### Soak
 
-`scripts/soak.sh` with `DURATION=600` wrote `results/raw/soak-600s.json`. The shell timestamps around that script were `2026-11-25T01:09:21Z` to `2026-11-25T01:19:22Z` (601 seconds of wall clock, including server startup and the generator's 1 second warmup). The JSON `duration_s` is 600. That is the measurement window. It is not a 1-hour or 24-hour soak. Those were not started.
+`scripts/soak.sh` with `DURATION=600` wrote `results/raw/soak-600s.json`. The shell timestamps around that script were `2026-11-25T01:09:21Z` to `2026-11-25T01:19:22Z` (601 seconds of wall clock, including server startup and the generator's 1 second warmup). The JSON `duration_s` is 600. That is the measurement window for this file. It is not the 1-hour run below, and it is not a 24-hour soak.
 
 | | |
 | --- | --- |

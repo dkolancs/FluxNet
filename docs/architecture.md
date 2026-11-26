@@ -8,7 +8,7 @@ flowchart TB
     listen[listen socket]
     sig[signalfd]
     wakeA[eventfd]
-    epA[epoll]
+    epA[epoll or io_uring accept]
   end
   subgraph w0 [Worker 0]
     q0[SPSC or mutex handoff]
@@ -17,7 +17,7 @@ flowchart TB
     p0[buffer pool]
   end
   listen --> epA
-  epA -->|accept4| q0
+  epA -->|accepted fd| q0
   q0 --> r0
   t0 --> r0
   r0 --> p0

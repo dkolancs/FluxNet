@@ -16,4 +16,6 @@ Do not compare JSON files from different CPUs or different payloads. `scripts/co
 
 `scripts/profile.sh` writes `results/raw/perf.txt` and does not invent counters. On this guest `perf` was not installed and `perf_event_paranoid` was 2.
 
-`scripts/soak.sh` runs for exactly `DURATION` seconds of measurement, after a 1 second warmup. `DURATION=600` produced `results/raw/soak-600s.json`. The wall clock of that script was 601 seconds. A 45 second file under `results/legacy-unmerged/` is a 45 second run. A 1-hour or 24-hour invocation was not started.
+`scripts/soak.sh` runs for exactly `DURATION` seconds of measurement, after a 1 second warmup. `DURATION=600` produced `results/raw/soak-600s.json` (wall clock 601 seconds). `DURATION=3600 PORT=19520` produced `results/raw/soak-3600s.json` (script log `2026-11-25T03:00:51Z` to `2026-11-25T04:00:52Z`, exit 0, 1411841756 messages, 0 failures, p50 65024 ns, p99 143360 ns). A 45 second file under `results/legacy-unmerged/` is a 45 second run and used unmerged percentiles. A 24-hour run was not started: `DURATION=86400 PORT=19521 bash scripts/soak.sh`.
+
+`timed_out` in a generator JSON is the number of requests still outstanding when the measurement window closes. It is not a payload failure. `failures` stays 0 when those bytes were never answered but also never mismatched. The 10000-connection file has `timed_out` 9917 and `completed` 879640. The 3600 second file has `timed_out` 22.

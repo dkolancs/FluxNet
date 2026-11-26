@@ -36,7 +36,7 @@ This completion branch is `cursor/fluxnet-completion`, cut from `origin/main` at
 | libFuzzer | Implemented and verified for 200 decoder inputs (`scripts/fuzz_decode.sh`, exit 0). Not a multi-hour fuzz |
 | Valgrind on the six unit binaries | Implemented and verified. 0 errors from `--leak-check=full`. Integration suite not run under Valgrind |
 | perf counters | Blocked. `perf` not installed; `linux-tools-6.12.113` not in apt; `perf_event_paranoid` is 2 |
-| 1M small messages/s | Not reached. Highest short active run in this pass is 439820 msgs/s at 10000 connections. The 600 second run was 401951 msgs/s |
+| 1M small messages/s | Not reached. The highest short rate in `results/raw/` is 439820 msgs/s at 10000 connections (`epoll-1w-c10000-p64.json`, p99 40370176 ns, `timed_out` 9917 at cutoff). The 600 second soak was 401951 msgs/s and the 3600 second soak was 392178 msgs/s |
 
 ## Commands that passed
 
@@ -82,7 +82,7 @@ That run finished with failures 0 and connect_failures 0. Charts were regenerate
 | 13 Comparison matrix | Implemented and verified for the short matrix in BENCHMARKS.md, including 5000 and 10000 active connections. Not a full cartesian product. 8 workers not run on a 4-CPU guest |
 | 14 CrashLab | Partially verified. Adapter and schema-valid YAML exist and the adapter test passed. The CrashLab CLI was not run. Blocked by the Docker daemon and `tc` EPERM |
 | 15 Tests and sanitizers | Implemented and verified for unit, integration, concurrency, stress, ASan, UBSan, TSan, Valgrind unit binaries, and a 200-input libFuzzer run |
-| 16 CI | Implemented but partially verified. Workflow contains gcc, clang, sanitizers, format, compare script, optional benchmark artifact upload, and optional clang-tidy. GitHub did not run this revision here |
+| 16 CI | Implemented but partially verified. Workflow contains gcc, clang, sanitizers, format, compare script, optional benchmark artifact upload, and optional clang-tidy. GitHub Actions reported 14 successful checks on `6e2d71a` before that commit was merged. A documentation-only commit after that was not a new CI run |
 | 17 Docs | Implemented and verified against `results/raw` for the runs that finished. No LICENSE file |
 | 18 Audit | Implemented and verified for the defects fixed earlier and the liburing TSan note. Not a release recommendation |
 

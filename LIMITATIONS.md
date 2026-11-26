@@ -14,14 +14,14 @@ Facts below were read on this machine during this session. They are not a generi
 - RAM: `MemTotal` 16387328 kB (about 15.6 GiB). `free -h` showed about 15 GiB total. No swap.
 - `ulimit -n`: 524288. `ulimit -u`: 63994. `ulimit -l` (max locked memory): 8192 KiB.
 - `perf_event_paranoid`: 2. `perf` is still not installed. `apt` could not find `linux-tools-6.12.113`. `results/raw/perf.txt` records that. No hardware counters and no flame graphs.
-- `valgrind` is installed. `valgrind --leak-check=full` on `fluxnet_unit_codec` reported 0 errors and 0 bytes in use at exit. The integration suite was not run under Valgrind.
+- `valgrind` is installed. `valgrind --leak-check=full --quiet` passed `fluxnet_unit_fd`, `fluxnet_unit_socket`, `fluxnet_unit_codec`, `fluxnet_unit_queue`, `fluxnet_unit_pool`, and `fluxnet_unit_histogram` with exit 0. An earlier run of `fluxnet_unit_codec` alone also reported 0 errors and 0 bytes in use at exit. The integration suite was not run under Valgrind.
 - `docker.io` is installed. The daemon did not start (`policy-rc.d denied execution of start`, no `/var/run/docker.sock`). `compose.yaml` was not executed.
 - `tc` is installed. `tc qdisc add dev lo root netem delay 1ms` returned `Operation not permitted`.
 - `stress-ng` is installed and was used by `experiments/faults/cpu_stress.sh`. That is not CrashLab.
 - CrashLab: the repository `github.com/dkolancs/CrashLab` exists. It was not cloned onto this machine. `crashlab/experiments/echo-latency.yaml` matches its file schema and was not run. See `crashlab/INTEGRATION.md`.
 - libFuzzer: `scripts/fuzz_decode.sh` compiled with `libclang-rt-18-dev` and ran 200 inputs (`Done 200 runs`, exit 0). Clang needs the g++ include and library paths on this guest.
 - ThreadSanitizer: the epoll-only integration tests (`--gtest_filter=-Echo.IoUring*`, 17 tests) passed with `TSAN_OPTIONS=halt_on_error=1` and no suppressions. A warning that did fire was confined to `Echo.IoUringTinyRingStillEchoes`: stacks were `probe_uring_features` on the run thread and `UringDriver::submit_poll` on the worker, at `anon_inode:[io_uring]`, not a FluxNet object. The probe used to run after worker threads had already opened their rings. It now runs first. After that move, the same io_uring filter and the full integration binary passed under TSan with no suppressions and no warning. A separate two-thread program that only creates private rings (`/tmp/iouring_tsan_repro2.c`, not part of the build) did not warn. No `tests/tsan.supp` remains.
-- Git identity for new commits: `Divith Reddy Kolan <dkolan@asu.edu>`, repo-local config only. Nothing was pushed. The initial commit still contains a historical `Co-authored-by` trailer. It was not rewritten. A local commit-msg hook tries to append `Co-authored-by: dkolancs <dkolancs@users.noreply.github.com>`; commits in this pass were created with that hook disabled so the trailer is not on the new commits.
+- Git identity for commits created in this repository after the initial commit: `Divith Reddy Kolan <dkolan@asu.edu>`. The initial commit still contains a historical `Co-authored-by` trailer and was not rewritten. A local commit-msg hook tries to append `Co-authored-by: dkolancs <dkolancs@users.noreply.github.com>`; commits that should not carry it were amended with that hook disabled.
 
 ## Toolchain (after installing missing packages)
 
@@ -49,9 +49,9 @@ io_uring:
 
 GoogleTest v1.14.0 and Google Benchmark v1.8.3 are fetched by CMake (`GIT_TAG`), not vendored. Configuring the build needs network access to GitHub.
 
-Boost 1.83 headers were installed from `libboost-dev`. `fluxnet_asio_echo` is a separate executable built with `-DFLUXNET_ENABLE_ASIO_BASELINE=ON`. `libfluxnet` does not link Boost. The 10-connection Asio numbers are in `results/raw/asio-c10-p64.json`.
+Boost 1.83 headers were installed from `libboost-dev`. `fluxnet_asio_echo` is a separate executable built with `-DFLUXNET_ENABLE_ASIO_BASELINE=ON`. `libfluxnet` does not link Boost. The only Asio measurement is `results/raw/asio-c10-p64.json`: 10 connections, 64-byte payload, 2 seconds, 237147 msgs/s, p99 50176 ns, 0 failures, git `ecc7a98`.
 
-libFuzzer was not used. Protocol fuzzing is a deterministic in-process driver.
+The in-process fuzz driver in `tests/fuzz/test_fuzz.cpp` is what `ctest` runs. Separately, `scripts/fuzz_decode.sh` ran libFuzzer for 200 inputs after `libclang-rt-18-dev` was installed. That is not a substitute for the in-process driver, and it was not a long fuzz campaign.
 
 ## Library limits (by design)
 
@@ -68,11 +68,11 @@ libFuzzer was not used. Protocol fuzzing is a deterministic in-process driver.
 - No HTTP, TLS, or UDP.
 - Pub/sub and KV are in-memory examples. They are not durable.
 - Loopback benchmarks include client and server on the same 4 vCPU guest. They are not NIC numbers.
-- Soak: `DURATION=600` finished (`results/raw/soak-600s.json`, wall clock 601 seconds for the script). A 1-hour or 24-hour soak was not started. The 45 second file in `results/legacy-unmerged/` is an older run and used unmerged percentiles.
+- Soak: `DURATION=600` finished (`results/raw/soak-600s.json`, wall clock 601 seconds for the script). `DURATION=3600` also finished (`results/raw/soak-3600s.json`, script log `2026-11-25T03:00:51Z` to `2026-11-25T04:00:52Z`, exit 0, 1411841756 messages, 0 failures). A 24-hour soak was not started: `DURATION=86400 PORT=19521 bash scripts/soak.sh`. The 45 second file in `results/legacy-unmerged/` is an older run and used unmerged percentiles. Neither finished soak recorded a server RSS time series. The 3600 second file has generator RSS only at exit (`generator_rss_kb` 4256).
 
 ## Idle connections
 
-`scripts/scale_connections.sh` held 10000 idle connections to a 1-worker echo server. `connected=10000 failed=0`. Server RSS was 177052 kB, `Threads` 2. No EMFILE was logged. Those sockets were not sending. The active-message runs are the benchmark JSON files. `results/raw/epoll-1w-c5000-p64.json` is 5000 connections actively sending (240632 msgs/s, p99 about 58 ms, 0 failures). 10000 active senders were not run. Eight worker threads were not run on this 4-CPU guest.
+`scripts/scale_connections.sh` held 10000 idle connections to a 1-worker echo server. `connected=10000 failed=0`. Server RSS was 177052 kB, `Threads` 2. No EMFILE was logged. Those sockets were not sending. Active runs are separate JSON files. `results/raw/epoll-1w-c5000-p64.json` is 5000 connections with completed messages (240632 msgs/s, p99 about 58 ms, 0 failures). `results/raw/epoll-1w-c10000-p64.json` is 10000 connections that each sent and received echoed payloads (879640 completions, 56296960 bytes, 0 failures, 0 connect failures). `timed_out` in that file is 9917, the requests still outstanding when the 2 second window closed, not a count of idle sockets. Eight worker threads were not run on this 4-CPU guest.
 
 ## Authorship
 
